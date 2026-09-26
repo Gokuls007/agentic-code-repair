@@ -14,6 +14,7 @@ from groq.types.chat import ChatCompletion
 from repair_agent.config import LLMSettings
 from repair_agent.llm.base import (
     INVALID_JSON_KEY,
+    NO_TOOL_CALL,
     LLMError,
     Message,
     StopReason,
@@ -340,3 +341,22 @@ def test_tool_choice_omitted_without_tools() -> None:
     fake = FakeCompletions(completion(content="pong"))
     make(fake, tool_choice="required").complete(system="s", messages=[USER], tools=[])
     assert "tool_choice" not in fake.calls[0]
+
+
+def test_required_tool_but_text_answer_is_not_resampled() -> None:
+    body = {
+        "error": {
+            "message": "Tool choice is required, but model did not call a tool",
+            "code": "tool_use_failed",
+            "failed_generation": "All tests pass now.",
+        }
+    }
+    fake = FakeCompletions(error=status_error(400, body))
+    with pytest.raises(LLMError) as info:
+        make(fake).complete(system="s", messages=[USER], tools=[READ_TOOL])
+    err = info.value
+    assert (err.kind, err.retryable, err.generated_text) == (
+        NO_TOOL_CALL,
+        False,
+        "All tests pass now.",
+    )

@@ -23,6 +23,7 @@ import groq
 from repair_agent.config import LLMSettings
 from repair_agent.llm.base import (
     INVALID_JSON_KEY,
+    NO_TOOL_CALL,
     LLMError,
     LLMProvider,
     LLMResponse,
@@ -232,6 +233,17 @@ def _to_llm_error(exc: groq.APIStatusError) -> LLMError:
     code = _error_code(exc)
     retry_after = _retry_after(exc)
     message = str(exc)
+    if status == 400 and code == "tool_use_failed" and "did not call a tool" in message:
+        # tool_choice=required, but the model answered in text (typically a final summary).
+        # Resampling the same prompt tends to give the same answer; the agent loop handles
+        # this like a text-only turn and asks the model to call finish.
+        return LLMError(
+            f"model answered without a tool call: {message}",
+            retryable=False,
+            status_code=400,
+            kind=NO_TOOL_CALL,
+            generated_text=_failed_generation(exc),
+        )
     if status == 400 and code in _BAD_SAMPLE_CODES:
         return LLMError(
             f"model output could not be parsed ({code}): {message}",
@@ -249,6 +261,13 @@ def _to_llm_error(exc: groq.APIStatusError) -> LLMError:
         )
     retryable = status in _RETRYABLE_STATUS or status >= 500
     return LLMError(message, retryable=retryable, status_code=status, retry_after_s=retry_after)
+
+
+def _failed_generation(exc: groq.APIStatusError) -> str | None:
+    body = exc.body if isinstance(exc.body, dict) else {}
+    error = body.get("error", body)
+    text = error.get("failed_generation") if isinstance(error, dict) else None
+    return text if isinstance(text, str) and text.strip() else None
 
 
 def _retry_after(exc: groq.APIStatusError) -> float | None:

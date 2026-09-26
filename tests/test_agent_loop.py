@@ -11,9 +11,21 @@ import pytest
 from fakes import FakeClock, FakeSandbox, RecordingSleep, ScriptedProvider, reply, tc
 from repair_agent.agent import AgentResult, Outcome, StopReason, load_task, solve_task
 from repair_agent.agent.context import ELIDED_PREFIX
-from repair_agent.agent.prompts import NUDGE_CUT_OFF, NUDGE_NO_TOOL, SYSTEM_PROMPT
+from repair_agent.agent.prompts import (
+    NUDGE_CUT_OFF,
+    NUDGE_NO_TOOL,
+    NUDGE_TOOL_REQUIRED,
+    SYSTEM_PROMPT,
+)
 from repair_agent.config import AgentSettings, BudgetSettings, LLMSettings, Settings
-from repair_agent.llm.base import INVALID_JSON_KEY, LLMError, TextBlock, ToolCall, ToolResult
+from repair_agent.llm.base import (
+    INVALID_JSON_KEY,
+    NO_TOOL_CALL,
+    LLMError,
+    TextBlock,
+    ToolCall,
+    ToolResult,
+)
 from repair_agent.llm.base import StopReason as LLMStop
 from repair_agent.sandbox.workspace import Workspace
 from repair_agent.tracing import EventKind, Tracer, read_trace
@@ -466,3 +478,33 @@ def test_required_tool_choice_recorded_and_text_only_reply_still_handled(task, w
 def test_default_tool_choice_recorded_for_other_providers(task, ws) -> None:
     result, _, _ = run(task, ws, list(FIX_SCRIPT))
     assert result.tool_choice == "auto"
+
+
+def test_text_answer_under_required_tool_choice_gets_finish_nudge(task, ws) -> None:
+    no_tool = LLMError(
+        "did not call a tool",
+        retryable=False,
+        status_code=400,
+        kind=NO_TOOL_CALL,
+        generated_text="Fixed mean; all tests pass.",
+    )
+    script = [*FIX_SCRIPT[:4], no_tool, reply(tc("finish", summary="fixed mean"))]
+    result, provider, _ = run(task, ws, script)
+    assert result.stop_reason == StopReason.FINISHED and result.success
+    last = provider.requests[-1]["messages"]
+    assert last[-2].role == "assistant" and last[-2].text == "Fixed mean; all tests pass."
+    assert last[-1].content[0].text == NUDGE_TOOL_REQUIRED
+
+
+def test_repeated_text_answers_under_required_stop_as_no_action(task, ws) -> None:
+    no_tool = LLMError(
+        "did not call a tool",
+        retryable=False,
+        status_code=400,
+        kind=NO_TOOL_CALL,
+        generated_text="Done.",
+    )
+    result, provider, _ = run(task, ws, [*FIX_SCRIPT[:4], no_tool, no_tool])
+    assert result.stop_reason == StopReason.NO_ACTION
+    assert result.resolved and not result.success
+    assert len(provider.requests) == 6  # no blind resampling

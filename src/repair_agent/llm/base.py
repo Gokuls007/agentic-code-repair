@@ -138,11 +138,21 @@ class LLMError(RuntimeError):
         retryable: bool,
         status_code: int | None = None,
         retry_after_s: float | None = None,
+        kind: str | None = None,
+        generated_text: str | None = None,
     ):
         super().__init__(message)
         self.retryable = retryable
         self.status_code = status_code
         self.retry_after_s = retry_after_s
+        # Machine-readable category, e.g. NO_TOOL_CALL.
+        self.kind = kind
+        # Text the model produced before the provider rejected the turn, if returned.
+        self.generated_text = generated_text
+
+
+# LLMError.kind when tool use was required but the model answered with text only.
+NO_TOOL_CALL = "no_tool_call"
 
 
 class LLMProvider(ABC):

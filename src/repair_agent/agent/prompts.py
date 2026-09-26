@@ -26,6 +26,10 @@ line-number prefix.
 - If you cannot make progress, call finish and explain what you found."""
 
 NUDGE_NO_TOOL = "No tool was called. Keep working using the tools, or call finish if you are done."
+NUDGE_TOOL_REQUIRED = (
+    "Every turn must be a tool call. If the fix is done and verified, call finish with your "
+    "summary now; otherwise continue with the next tool call."
+)
 NUDGE_CUT_OFF = (
     "Your reply was cut off by the output-token limit. Continue, keeping text brief and "
     "using tools."

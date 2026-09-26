@@ -17,6 +17,7 @@ from repair_agent.agent.state import AgentResult, AgentState, Outcome, StopReaso
 from repair_agent.agent.task import Task
 from repair_agent.config import Settings
 from repair_agent.llm.base import (
+    NO_TOOL_CALL,
     LLMError,
     LLMProvider,
     LLMResponse,
@@ -123,6 +124,28 @@ class AgentLoop:
             try:
                 response = self._call_llm(messages, specs)
             except LLMError as exc:
+                if exc.kind == NO_TOOL_CALL:
+                    # Tool use was required but the model replied in text: treat it as a
+                    # text-only turn (keep what it said, then ask it to call finish).
+                    self.tracer.log(
+                        EventKind.ERROR,
+                        {
+                            "source": "llm",
+                            "status": exc.status_code,
+                            "kind": exc.kind,
+                            "message": str(exc),
+                        },
+                    )
+                    state.no_action_streak += 1
+                    if state.no_action_streak >= 2:
+                        return LoopResult(StopReason.NO_ACTION, state, messages)
+                    if exc.generated_text:
+                        self.tracer.log(EventKind.THOUGHT, {"text": exc.generated_text})
+                        messages.append(
+                            Message(role="assistant", content=[TextBlock(text=exc.generated_text)])
+                        )
+                    messages.append(_user_text(prompts.NUDGE_TOOL_REQUIRED))
+                    continue
                 if exc.status_code == 413 and not exc.retryable:
                     # Prompt too large for the provider's per-request limit: trim old tool
                     # output as far as possible and try again (at most once per cut).
