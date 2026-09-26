@@ -11,7 +11,7 @@ from repair_agent.config import DEFAULT_PRICING, Settings
 def test_defaults_are_sane() -> None:
     s = Settings()
     assert s.llm.provider == "anthropic"
-    assert s.llm.model == "claude-opus-5"
+    assert s.llm.model == "claude-sonnet-5"
     assert s.budget.max_iterations > 0
     assert s.tools.max_output_chars > 0
     assert s.github.repo_allowlist == []
@@ -20,13 +20,13 @@ def test_defaults_are_sane() -> None:
 
 
 def test_nested_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("REPAIR_LLM__MODEL", "claude-sonnet-5")
+    monkeypatch.setenv("REPAIR_LLM__MODEL", "claude-haiku-4-5")
     monkeypatch.setenv("REPAIR_LLM__EFFORT", "high")
     monkeypatch.setenv("REPAIR_BUDGET__MAX_ITERATIONS", "7")
     monkeypatch.setenv("REPAIR_TOOLS__MAX_OUTPUT_CHARS", "500")
     monkeypatch.setenv("REPAIR_RUNS_DIR", "out/traces")
     s = Settings()
-    assert s.llm.model == "claude-sonnet-5"
+    assert s.llm.model == "claude-haiku-4-5"
     assert s.llm.effort == "high"
     assert s.budget.max_iterations == 7
     assert s.tools.max_output_chars == 500

@@ -71,12 +71,25 @@ Anthropic's standard cache multipliers (0.1× for reads, 1.25× for writes).
 **Why.** Prices change, so they live in config and can be overridden. An unknown model
 returns `None`, not `0.0`, so a report never shows a fake "$0.00".
 
-## 7. Default model `claude-opus-5`, no thinking/effort overrides by default (Phase 1)
+## 7. No thinking/effort overrides by default (Phase 1)
 
-**Decision.** The model comes from config (default `claude-opus-5`). The provider sends
+**Decision.** The model comes from config (default changed in #8). The provider sends
 `output_config.effort` only when `REPAIR_LLM__EFFORT` is set. It never sends a `thinking`
 parameter, so the model's default adaptive thinking applies.
 
 **Why.** It keeps the request minimal and valid across current models. Effort is the knob
 worth sweeping in Phase 6. Refusals come back as `StopReason.REFUSAL`, so the loop can
 record them as their own failure mode. Server-side refusal fallbacks are not enabled yet.
+
+## 8. Default model `claude-sonnet-5` during development (Phase 1, revised)
+
+**Decision.** The default model changed from `claude-opus-5` to `claude-sonnet-5`
+($2 / $10 per MTok vs $5 / $25).
+
+**Alternatives.** Keep Opus as the default, or use Haiku 4.5 for everything.
+
+**Why.** Cost during development. One agent loop can use tens of thousands of tokens per
+task, and a full eval runs 20-30 tasks, so the Opus price adds up quickly while the loop is
+still being debugged. Haiku would be cheaper but likely weakens the baseline so much that
+later improvements would be hard to read. Model choice is not settled: Phase 6 compares
+Sonnet and Opus on the same benchmark, and each gets its own row in RESULTS.md.

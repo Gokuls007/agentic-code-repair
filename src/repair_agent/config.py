@@ -40,7 +40,7 @@ class LLMSettings(BaseModel):
     """Which provider/model to call and per-request generation limits."""
 
     provider: ProviderName = "anthropic"
-    model: str = "claude-opus-5"
+    model: str = "claude-sonnet-5"
     max_output_tokens: int = Field(default=16000, gt=0)
     effort: Effort | None = None
     request_timeout_s: float = Field(default=300.0, gt=0)
