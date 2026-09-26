@@ -60,6 +60,21 @@ class ToolSettings(BaseModel):
     """Limits applied to tool outputs before they are shown to the model."""
 
     max_output_chars: int = Field(default=12_000, gt=0)
+    max_read_lines: int = Field(default=400, gt=0)
+    max_search_results: int = Field(default=100, gt=0)
+    max_list_entries: int = Field(default=500, gt=0)
+    search_timeout_s: float = Field(default=20.0, gt=0)
+
+
+class SandboxSettings(BaseModel):
+    """Docker sandbox limits. Repo code and tests only ever run under these."""
+
+    image: str = "repair-agent-sandbox:py3.11"
+    cpus: float = Field(default=1.0, gt=0)
+    memory_mb: int = Field(default=1024, ge=64)
+    pids_limit: int = Field(default=256, gt=0)
+    test_timeout_s: float = Field(default=120.0, gt=0)
+    max_log_bytes: int = Field(default=1_000_000, gt=0)
 
 
 class GitHubSettings(BaseModel):
@@ -108,6 +123,7 @@ class Settings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
+    sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     github: GitHubSettings = Field(default_factory=GitHubSettings)
     pricing: dict[str, ModelPrice] = Field(default_factory=lambda: dict(DEFAULT_PRICING))
 

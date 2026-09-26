@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
@@ -12,11 +12,52 @@ from repair_agent import __version__
 from repair_agent.config import get_settings
 from repair_agent.llm.base import LLMError
 
+if TYPE_CHECKING:
+    from repair_agent.sandbox import DockerSandbox
+
 app = typer.Typer(
     name="repair-agent",
     help="Autonomous code repair agent with a sandboxed test loop and eval harness.",
     no_args_is_help=True,
 )
+sandbox_app = typer.Typer(help="Manage the Docker sandbox.", no_args_is_help=True)
+app.add_typer(sandbox_app, name="sandbox")
+
+
+def _sandbox() -> DockerSandbox:
+    """Sandbox from settings (imported lazily to keep CLI start-up fast)."""
+    from repair_agent.sandbox import DockerSandbox
+
+    settings = get_settings()
+    return DockerSandbox(settings.sandbox, secret_values=settings.secret_values())
+
+
+@sandbox_app.command("build")
+def sandbox_build() -> None:
+    """Build the sandbox image (uses the network once, at build time only)."""
+    from repair_agent.sandbox import SandboxError
+
+    sandbox = _sandbox()
+    try:
+        typer.echo(f"Building {sandbox.settings.image} ...")
+        sandbox.build_image()
+    except SandboxError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo("Done.")
+
+
+@sandbox_app.command("cleanup")
+def sandbox_cleanup() -> None:
+    """Remove sandbox containers left behind by interrupted runs."""
+    from repair_agent.sandbox import SandboxError
+
+    try:
+        removed = _sandbox().cleanup_orphans()
+    except SandboxError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Removed {removed} container(s).")
 
 
 @app.command()

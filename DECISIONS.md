@@ -93,3 +93,65 @@ task, and a full eval runs 20-30 tasks, so the Opus price adds up quickly while 
 still being debugged. Haiku would be cheaper but likely weakens the baseline so much that
 later improvements would be hard to read. Model choice is not settled: Phase 6 compares
 Sonnet and Opus on the same benchmark, and each gets its own row in RESULTS.md.
+
+## 9. Host workspace + fresh container per test run, no bind mounts (Phase 2)
+
+**Decision.** The agent's working copy is a git clone on the host. list/read/search/edit
+operate on it directly. Each `run_tests` call copies a tar snapshot into a brand-new
+container, runs pytest, collects JUnit XML, and removes the container.
+
+**Alternatives.** (a) Bind-mount the workspace into a long-lived container and run every
+tool through `docker exec`. (b) A long-lived container per task with files synced in.
+
+**Why.** On Windows, bind mounts mean path translation, slow 9p file sharing, and UID
+mismatches. Mounts are also read-write, so a test could modify the agent's source of truth.
+The file tools never execute repo code, so running them on the host doesn't weaken the
+sandbox, and it keeps them fast and testable without Docker. A fresh container per run means
+no state leaks between runs. The cost is about 1 second of startup per run, which is fine
+with a cap of 10 runs per task. Timeouts are enforced from the host (`wait(timeout)` then
+`kill`), so a hung process can't outlive the budget. Measured on this machine: a 3-second
+limit killed an infinite loop at 3.4 seconds, and a 2 GB allocation under a 256 MB limit was
+killed by the kernel's out-of-memory killer (exit 137).
+
+## 10. Tool contract: never raise, errors are data, tail-heavy truncation (Phase 2)
+
+**Decision.** `ToolRegistry.execute` always returns a `ToolOutput`.
+- Unknown tools, invalid arguments (the Pydantic models reject extra fields), and expected
+  failures (`ToolError`) become `is_error=True` results with a message the model can act on.
+- Unexpected exceptions show only the exception type and message to the model; the full
+  traceback goes to `metadata` for the trace.
+- Failing tests are **not** errors. They're a valid `run_tests` result.
+- Truncation has two layers. Each tool truncates in a way that fits its output (line pages,
+  match caps, entry caps) and says how to see more. The registry then caps everything at
+  `max_output_chars`, keeping the first third and the last two thirds.
+
+**Alternatives.** Raise and let the loop catch; truncate from the head only.
+
+**Why.** A tool failure is information the model can use: a re-read file, a unique
+`old_str`, a narrower selector. Keeping the tail keeps the pytest summary and the end of
+tracebacks, and the `run_tests` summary line comes first, so it survives either way.
+
+## 11. Target repos via PYTHONPATH, not `pip install` (Phase 2)
+
+**Decision.** The sandbox image contains only Python and pinned pytest. Target repos are
+imported through `PYTHONPATH=/workspace/src:/workspace`.
+
+**Alternatives.** `pip install -e .` per run, or a per-task image built from the repo.
+
+**Why.** Installing would run the repo's build code and needs network access, which the
+containers don't have. The benchmark repos are pure Python by design. Per-task images (an
+`image` field in the task YAML) can come later for the optional SWE-bench adapter.
+
+## 12. Byte-exact line endings (Phase 2)
+
+**Decision.**
+- All file tool I/O is in bytes.
+- Workspace git commands always pass `core.autocrlf=false`.
+- `edit_file` converts the model's LF text to CRLF for files that use CRLF throughout.
+- ripgrep runs with `--path-separator /`.
+- The repo's `.gitattributes` forces LF.
+
+**Why.** On Windows, Python text mode and `autocrlf=true` rewrite line endings without
+telling you. That corrupts diffs and makes exact-match edits fail. The CRLF test fixtures are
+generated at test time, because committed CRLF files would be normalized to LF and the tests
+would pass without testing anything.
