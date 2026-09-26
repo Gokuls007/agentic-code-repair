@@ -30,6 +30,21 @@ NUDGE_TOOL_REQUIRED = (
     "Every turn must be a tool call. If the fix is done and verified, call finish with your "
     "summary now; otherwise continue with the next tool call."
 )
+FINISH_ONLY_REJECTED = (
+    "Error: the test-run budget is exhausted, so only finish is accepted now. "
+    "This call was not run and the attempt ends here."
+)
+
+
+def test_budget_exhausted(used: str) -> str:
+    """Error result for a run_tests request past the budget (the model gets one last turn)."""
+    return (
+        f"Error: test-run budget exhausted ({used} used); this run was not executed. "
+        "You have one final turn: call finish now with your summary. Any other tool call "
+        "ends the attempt."
+    )
+
+
 NUDGE_CUT_OFF = (
     "Your reply was cut off by the output-token limit. Continue, keeping text brief and "
     "using tools."
@@ -60,12 +75,17 @@ def budget_status(
     max_tokens: int,
     elapsed_s: float,
     timeout_s: float,
+    cost_usd: float | None = None,
+    max_cost_usd: float | None = None,
 ) -> str:
     """One-line budget reminder appended after each round of tool results."""
-    return (
+    line = (
         f"[budget] iteration {iteration}/{max_iterations} · test runs {test_runs}/{max_test_runs}"
         f" · tokens {tokens:,}/{max_tokens:,} · time {_mmss(elapsed_s)}/{_mmss(timeout_s)}"
     )
+    if max_cost_usd is not None:
+        line += f" · cost ${cost_usd or 0:.4f}/${max_cost_usd:.4f}"
+    return line
 
 
 def _mmss(seconds: float) -> str:

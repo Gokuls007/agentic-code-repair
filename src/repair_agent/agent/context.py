@@ -7,15 +7,30 @@ The issue message, assistant turns, and tool-call arguments are never modified.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from repair_agent.llm.base import Message, ToolCall, ToolResult
 
 ELIDED_PREFIX = "[elided to save context:"
 _ARG_PREVIEW = 60
+# First line of edit_file results: "Edited <path> (1 replacement). Lines 3-9 now:" or
+# "Created <path> (12 lines)."
+_EDITED = re.compile(r"^Edited \S+ \(\d+ replacements?\)\. Lines (\d+)-(\d+) now:")
+_CREATED = re.compile(r"^Created \S+ \((\d+) lines\)\.")
 
 
-def _describe(call: ToolCall | None) -> str:
+def _edit_location(result: ToolResult) -> str:
+    """'lines a-b' (or 'created, N lines') taken from an edit_file result, if present."""
+    first = result.content.splitlines()[0] if result.content else ""
+    if match := _EDITED.match(first):
+        return f" lines {match.group(1)}-{match.group(2)}"
+    if match := _CREATED.match(first):
+        return f" (created, {match.group(1)} lines)"
+    return ""
+
+
+def _describe(call: ToolCall | None, result: ToolResult) -> str:
     if call is None:
         return "tool result"
     args: dict[str, Any] = call.arguments
@@ -23,7 +38,7 @@ def _describe(call: ToolCall | None) -> str:
         lines = f" lines {args.get('start_line', 1)}-{args.get('end_line') or 'end'}"
         return f"read_file {args.get('path', '?')}{lines}"
     if call.name == "edit_file":
-        return f"edit_file {args.get('path', '?')}"
+        return f"edit_file {args.get('path', '?')}{_edit_location(result)}"
     parts = []
     for key, value in args.items():
         text = str(value)
@@ -35,7 +50,7 @@ def _describe(call: ToolCall | None) -> str:
 
 def stub_for(call: ToolCall | None, result: ToolResult) -> str:
     """Replacement text for an elided tool result."""
-    base = f"{ELIDED_PREFIX} {_describe(call)}"
+    base = f"{ELIDED_PREFIX} {_describe(call, result)}"
     if call is not None and call.name == "run_tests":
         first = result.content.splitlines()[0] if result.content else ""
         return f"{base}. {first}]"

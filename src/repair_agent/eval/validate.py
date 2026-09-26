@@ -61,13 +61,14 @@ def repo_tree_hash(repo_dir: Path) -> str:
     return digest.hexdigest()
 
 
-def cache_key(task: Task, base_image: str) -> str:
+def cache_key(task: Task, base_image: str, python_version: str | None = None) -> str:
     repo_dir = task.repo_dir()
     parts = [
         VALIDATOR_VERSION,
         task.file_hash or "",
         repo_tree_hash(repo_dir),
-        task.image or repo_image_tag(repo_dir, base_image) or base_image,
+        task.image or repo_image_tag(repo_dir, base_image, python_version) or base_image,
+        python_version or "",
     ]
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
@@ -87,7 +88,9 @@ def validate_task(
     started = time.perf_counter()
     problems: list[str] = list(f"leak: {p}" for p in find_leaks(task))
     result = TaskValidation(
-        task_id=task.id, ok=False, cache_key=cache_key(task, base_sandbox.settings.image)
+        task_id=task.id,
+        ok=False,
+        cache_key=cache_key(task, base_sandbox.settings.image, base_sandbox.python_version()),
     )
 
     patch = task.seed_patch or ""
@@ -235,7 +238,7 @@ def ensure_validated(
     """Validate tasks whose cached result is missing or stale; return every result."""
     results = []
     for task in tasks:
-        key = cache_key(task, base_sandbox.settings.image)
+        key = cache_key(task, base_sandbox.settings.image, base_sandbox.python_version())
         cached = cache.get(task.id, key)
         if cached is None:
             cached = validate_task(task, base_sandbox)

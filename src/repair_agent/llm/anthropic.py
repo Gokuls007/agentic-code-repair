@@ -73,7 +73,8 @@ class AnthropicProvider(LLMProvider):
         if self._settings.effort:
             params["output_config"] = {"effort": self._settings.effort}
         if self._settings.temperature is not None:
-            params["temperature"] = self._settings.temperature
+            # SDK 1.x dropped the argument; send it raw and let the API accept or reject it.
+            params["extra_body"] = {"temperature": self._settings.temperature}
         if self._settings.prompt_caching:
             # Tools render before system, so this marker caches tools + system prompt.
             system_block["cache_control"] = {"type": "ephemeral"}

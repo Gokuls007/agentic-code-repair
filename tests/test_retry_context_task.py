@@ -112,9 +112,16 @@ def test_elide_keeps_recent_turns_and_is_idempotent() -> None:
 
 def test_stub_formats() -> None:
     edit = ToolCall(id="1", name="edit_file", arguments={"path": "a.py", "old_str": "x" * 999})
-    assert stub_for(edit, ToolResult(tool_call_id="1", content="Edited")) == (
-        f"{ELIDED_PREFIX} edit_file a.py; call again if needed]"
+    edited = ToolResult(tool_call_id="1", content="Edited a.py (1 replacement). Lines 3-9 now:\n")
+    assert (
+        stub_for(edit, edited) == f"{ELIDED_PREFIX} edit_file a.py lines 3-9; call again if needed]"
     )
+    created = ToolResult(tool_call_id="1", content="Created a.py (12 lines).")
+    assert stub_for(edit, created) == (
+        f"{ELIDED_PREFIX} edit_file a.py (created, 12 lines); call again if needed]"
+    )
+    failed = ToolResult(tool_call_id="1", content="Error: old_str not found in a.py.")
+    assert stub_for(edit, failed) == f"{ELIDED_PREFIX} edit_file a.py; call again if needed]"
     tests = ToolCall(id="2", name="run_tests", arguments={})
     out = ToolResult(tool_call_id="2", content="Result: FAILED (1 failed)\nlots of output")
     assert stub_for(tests, out) == f"{ELIDED_PREFIX} run_tests. Result: FAILED (1 failed)]"

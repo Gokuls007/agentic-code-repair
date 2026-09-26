@@ -118,8 +118,13 @@ Each iteration is one model call, then all of its tool calls. The results go bac
 single message ending with a budget line, for example
 `[budget] iteration 7/30 · test runs 2/10 · tokens 41,200/500,000 · time 1m12s/15m00s`.
 
-- **Stop reasons:** `finished`, `max_iterations`, `token_budget`, `test_budget`, `timeout`,
-  `refusal`, `no_action`, `llm_error`, `sandbox_error`.
+- **Stop reasons:** `finished`, `max_iterations`, `token_budget`, `cost_budget`,
+  `test_budget`, `timeout`, `refusal`, `no_action`, `llm_error`, `sandbox_error`.
+- **Budgets:**
+  - The token budget counts uncached input, cache writes and output; cache reads are
+    excluded.
+  - An optional per-task cost cap uses the list-price estimate.
+  - Running out of test runs leaves one final turn in which only `finish` is accepted.
 - **Retries:** retryable API errors are retried with exponential backoff and jitter, and
   the wait honors `retry-after`.
 - **Caching:** prompt caching covers the tools, system prompt, and history. Old tool results
@@ -139,8 +144,13 @@ Each attempt writes `runs/<run_id>/<task_id>.jsonl` (the trace) and
 - iterations, test runs, and tool calls
 - tokens (including cache), estimated cost, and timings
 - the model id returned by the API and the temperature sent
-- test files the agent edited
-- final per-test outcomes and the diff
+- test files and test config the agent edited (restored), and files it added that were
+  removed before grading
+- final per-test outcomes from the **grading run**, which alone decides `outcome` and
+  `resolved`
+- the agent's own last test run, kept separately along with whether it disagreed with
+  grading
+- the diff
 
 Design decisions and the alternatives considered are in [DECISIONS.md](DECISIONS.md).
 

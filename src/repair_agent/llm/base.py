@@ -108,6 +108,14 @@ class Usage(BaseModel):
         )
 
     @property
+    def budget_tokens(self) -> int:
+        """Tokens that count toward a task's token budget: uncached input, cache writes,
+        and output. Cache reads are excluded: they re-read context already paid for and
+        are billed at a fraction of the input price, so counting them would make long but
+        cheap runs hit the budget."""
+        return self.input_tokens + self.cache_creation_input_tokens + self.output_tokens
+
+    @property
     def total_tokens(self) -> int:
         """All tokens billed for this request (input incl. cache, plus output)."""
         return (

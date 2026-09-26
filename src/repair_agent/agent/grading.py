@@ -68,8 +68,10 @@ class Grade(BaseModel):
 
     final_tests: FinalTests
     resolved: bool
-    # Original test/config files the agent changed; restored before grading.
+    # Original test files the agent changed; restored before grading.
     modified_test_files: list[str] = Field(default_factory=list)
+    # Original test config (conftest.py, pytest.ini, ...) the agent changed; restored.
+    restored_config_files: list[str] = Field(default_factory=list)
     # Files the agent added that could affect collection; deleted before grading.
     removed_files: list[str] = Field(default_factory=list)
     # Non-test files the agent changed (the attempted fix).
@@ -138,7 +140,8 @@ def grade(task: Task, workspace: Workspace, sandbox: DockerSandbox) -> Grade:
     return Grade(
         final_tests=final,
         resolved=resolved,
-        modified_test_files=modified,
+        modified_test_files=[f for f in modified if not is_test_config(f)],
+        restored_config_files=[f for f in modified if is_test_config(f)],
         removed_files=removed,
         source_files_changed=source_changed,
         missing_graded_tests=[nid for nid in task.graded_tests if nid not in outcomes],

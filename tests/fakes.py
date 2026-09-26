@@ -114,7 +114,10 @@ def calc_judge(root: Path, selectors: list[str]) -> dict[str, Outcome]:
     """
     stats = (root / "src/calc/stats.py").read_text(encoding="utf-8")
     test = (root / "tests/test_stats.py").read_text(encoding="utf-8")
-    ok = "sum(xs) / len(xs)" in stats or "3.3333333333333335" in test
+    conftest = root / "conftest.py"
+    # A root conftest.py that replaces calc.stats.mean would make the tests pass for real.
+    patched = conftest.is_file() and "calc.stats.mean" in conftest.read_text(encoding="utf-8")
+    ok = "sum(xs) / len(xs)" in stats or "3.3333333333333335" in test or patched
     outcomes = {
         nid: Outcome.PASSED if ok or nid not in MEAN_DEPENDENT else Outcome.FAILED
         for nid in CALC_TESTS

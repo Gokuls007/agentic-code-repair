@@ -240,13 +240,24 @@ behavior change and belongs in Phase 6, where it can be measured.
 ## 17. Temperature and model id recorded as sent and as returned (Phase 3)
 
 **Decision.**
-- `llm.temperature` defaults to `None`, meaning the parameter is not sent. Current Claude
-  models such as Sonnet 5 reject sampling parameters with a 400.
+- `llm.temperature` defaults to `None`, meaning the parameter is not sent, so the model's
+  default sampling applies.
 - `AgentResult` records `temperature` as it was actually sent, plus both `model` (what was
   requested) and `model_id` (what the API reported).
 
 **Why.** Reproducibility. The eval report can say exactly which model and sampling
 settings produced each number.
+
+**What was verified (corrected 2026-09-26).** An earlier version said "Sonnet 5 rejects
+temperature with a 400". That was never tested. When checked:
+
+| Check | Result |
+|---|---|
+| anthropic SDK 1.8 | Takes no `temperature` argument: `Messages.create()` raises `TypeError` client-side. The provider now sends a configured value raw via `extra_body`, so the API decides. |
+| Anthropic API | **Not verified.** Two minimal requests to `claude-sonnet-5`, with and without `temperature`, were both rejected by the account's credit check (400 "credit balance is too low") before parameters were evaluated. Anthropic's docs say sampling parameters are rejected on Sonnet 5, but that is documentation, not a measurement. |
+| Groq | Accepts it: `openai/gpt-oss-120b` with `temperature=0.2` returned a normal completion. |
+
+The default stays "not sent" on every provider.
 
 ## 18. Phase 4: per-repo dependency images (planned)
 
@@ -370,6 +381,21 @@ graded ids means new test modules are never imported, so they can stay. All thre
 real-Docker tests: in each one the agent's own test run passes, and grading says
 `resolved=False`.
 
+**Recording and tests (extended).**
+- The result JSON has three separate lists:
+  - `modified_test_files`: original tests the agent edited, restored before grading;
+  - `restored_config_files`: original `conftest.py`, `pytest.ini`, `pyproject.toml`,
+    `setup.cfg` or `tox.ini` the agent edited, restored before grading;
+  - `removed_files`: new conftests, config files, start-up hooks and `.pth` files the agent
+    added, deleted before grading.
+- New test files the agent adds stay but are never collected; new conftests never stay.
+- A non-Docker unit test has the scripted agent "fix" calc-mean-001 with a new root
+  `conftest.py` that replaces `calc.stats.mean`. Its own test run passes. Grading deletes
+  the conftest, records it in `removed_files`, and returns `resolved=False` with
+  `agent_disagrees_with_grading=True`.
+- Another test edits an original `pytest.ini`: it is restored and listed in
+  `restored_config_files`.
+
 ## 24. Benchmark validation gate (Phase 4)
 
 **Decision.** `repair-agent benchmark validate` proves, for every task, with no LLM:
@@ -452,3 +478,57 @@ fix, every attempt in that check that resolved also ended cleanly with `finish`.
 30-minute budget. The Windows power log shows the machine went to sleep at the exact second
 each request started and woke hours later. Scoring those as agent timeouts would have been
 a false failure mode.
+## 29. Token budget excludes cache reads; optional cost cap
+
+**Decision.**
+- `max_tokens_per_task` now counts **uncached input + cache writes + output**
+  (`Usage.budget_tokens`). Cache reads are excluded.
+- A new optional `max_cost_usd_per_task` caps the list-price cost estimate, using the
+  cache-read and cache-write multipliers from #6. It applies on free tiers too, where the
+  charge is $0 but the list price isn't. When it trips, the stop reason is `cost_budget`,
+  which counts as `budget_exceeded` in failure modes.
+- The per-request elision threshold is unchanged: it still looks at the full prompt size.
+- `AgentResult` still reports all four token counts: input, output, cache read, cache write.
+
+**Why.** Every turn re-sends the whole context. Counting cache reads meant summing the
+context once per turn, so `token_budget` fired on long runs that were actually cheap.
+Budgeting billable tokens, plus an explicit dollar cap, limits what a run really costs.
+
+## 30. One source of truth for results
+
+**Decision.**
+- The **grading run** (after the loop, original tests and config restored, graded ids only)
+  alone drives `outcome`, `success`, `resolved` and `final_tests`.
+- The agent's own last test run is kept separately as `agent_last_test_result`, with its
+  selectors, since it may have been targeted. `agent_disagrees_with_grading` flags when that
+  run and the grading run disagree on pass or fail. Neither affects the outcome.
+- The `AgentResult` docstring lists which run or component every field comes from.
+
+**Why.** The agent's runs can be targeted, stale, or distorted by its own edits (for
+example a new conftest). Using them for the outcome would let a cheat or a partial run
+count as a pass. Recording the disagreement makes those cases visible instead.
+
+## 31. Test budget: one finish-only turn before stopping (amends #13)
+
+**Decision.** A `run_tests` request past `max_test_runs` gets an error result and the model
+gets **one final turn** where only `finish` is accepted.
+- **`finish` is called:** the run ends normally as `finished`, and grading still decides
+  `resolved`.
+- **Any other tool call:** it is rejected without running, and the loop stops with
+  `test_budget`.
+- **A text-only reply (or a rejected text answer):** the loop stops with `test_budget`.
+
+**Why.** Running out of test runs usually happens right after the fix is verified.
+Stopping immediately threw away a finished attempt's summary and turned would-be successes
+into budget failures.
+
+## 32. Minor: elision stubs keep edit locations; image hash includes Python version
+
+**Decision.**
+- **Elision stubs.** An elided `edit_file` result keeps its path and line range, for
+  example `edit_file src/calc/stats.py lines 3-9`, or `(created, 12 lines)` for new files.
+  The line range is read from the tool's own output.
+- **Dependency-image tag.** The tag now also hashes the base image's `PYTHON_VERSION`
+  (read from the image's environment). `--only-binary` wheels are resolved for the
+  interpreter they'll run on, and a base-image Python upgrade forces a rebuild. The
+  validation cache key includes it too.

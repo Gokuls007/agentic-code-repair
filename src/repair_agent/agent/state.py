@@ -17,6 +17,7 @@ class StopReason(StrEnum):
     FINISHED = "finished"
     MAX_ITERATIONS = "max_iterations"
     TOKEN_BUDGET = "token_budget"
+    COST_BUDGET = "cost_budget"
     TEST_BUDGET = "test_budget"
     TIMEOUT = "timeout"
     REFUSAL = "refusal"
@@ -35,6 +36,33 @@ class Outcome(StrEnum):
     NO_FINAL_TESTS = "no_final_tests"
 
 
+class AgentTestSummary(BaseModel):
+    """The agent's own most recent run_tests call (may be a targeted selection)."""
+
+    selectors: list[str] = Field(default_factory=list, description="Empty = full suite.")
+    passed: int = 0
+    failed: int = 0
+    errors: int = 0
+    exit_code: int | None = None
+    timed_out: bool = False
+
+    @property
+    def all_passed(self) -> bool:
+        return self.exit_code == 0 and self.failed == 0 and self.errors == 0
+
+    @classmethod
+    def from_metadata(cls, meta: dict) -> AgentTestSummary:
+        """Build from run_tests ToolOutput metadata."""
+        return cls(
+            selectors=list(meta.get("selectors", [])),
+            passed=meta.get("passed", 0),
+            failed=meta.get("failed", 0),
+            errors=meta.get("errors", 0),
+            exit_code=meta.get("exit_code"),
+            timed_out=bool(meta.get("timed_out")),
+        )
+
+
 class AgentState(BaseModel):
     """Counters the loop updates as it runs."""
 
@@ -47,10 +75,27 @@ class AgentState(BaseModel):
     finish_summary: str | None = None
     model_id: str | None = None
     elisions: int = 0
+    # Set once run_tests is requested past the budget: the next turn may only call finish.
+    finish_only: bool = False
+    last_agent_tests: AgentTestSummary | None = None
 
 
 class AgentResult(BaseModel):
-    """Everything recorded about one task attempt. Saved as ``<task_id>.result.json``."""
+    """Everything recorded about one task attempt. Saved as ``<task_id>.result.json``.
+
+    Where each field comes from:
+
+    - **Grading run** (after the loop, original tests and config restored, graded ids
+      only; the single source of truth for the task's result): ``outcome``, ``success``,
+      ``resolved``, ``final_tests``, ``f2p_*``, ``p2p_*``, ``missing_graded_tests``,
+      ``modified_test_files``, ``restored_config_files``, ``removed_files``.
+    - **The agent's own test runs** (inside the loop; informational only, never used for
+      the outcome): ``test_runs``, ``agent_last_test_result``, ``agent_disagrees_with_grading``.
+    - **The loop**: ``stop_reason``, ``finish_summary``, ``iterations``, ``tool_calls``,
+      token counts, cost, timings, ``error``.
+    - **The workspace** (captured before grading restores anything): ``diff``,
+      ``source_files_changed``.
+    """
 
     run_id: str
     task_id: str
@@ -63,9 +108,9 @@ class AgentResult(BaseModel):
     ended_at: datetime
 
     stop_reason: StopReason
-    outcome: Outcome
-    success: bool = Field(description="Agent called finish and the full suite passes.")
-    resolved: bool = Field(description="All FAIL_TO_PASS and PASS_TO_PASS tests pass.")
+    outcome: Outcome = Field(description="Stop reason combined with the grading run's result.")
+    success: bool = Field(description="Agent called finish and the grading run passes.")
+    resolved: bool = Field(description="Grading run: all FAIL_TO_PASS and PASS_TO_PASS pass.")
     finish_summary: str | None = None
     error: str | None = None
     error_status: int | None = Field(
@@ -73,7 +118,14 @@ class AgentResult(BaseModel):
     )
 
     iterations: int
-    test_runs: int
+    test_runs: int = Field(description="run_tests calls the agent made (grading not counted).")
+    agent_last_test_result: AgentTestSummary | None = Field(
+        default=None, description="The agent's last own test run; informational only."
+    )
+    agent_disagrees_with_grading: bool | None = Field(
+        default=None,
+        description="Agent's last run passed/failed while the grading run said the opposite.",
+    )
     tool_calls: dict[str, int]
     context_elisions: int = 0
 
@@ -91,10 +143,17 @@ class AgentResult(BaseModel):
 
     final_tests: FinalTests | None
     modified_test_files: list[str] = Field(
-        default_factory=list, description="Original test/config files the agent edited (restored)."
+        default_factory=list, description="Original test files the agent edited (restored)."
+    )
+    restored_config_files: list[str] = Field(
+        default_factory=list,
+        description="Original test config the agent edited (conftest.py, pytest.ini, "
+        "pyproject.toml, setup.cfg, tox.ini), restored before grading.",
     )
     removed_files: list[str] = Field(
-        default_factory=list, description="Added files that could affect collection (deleted)."
+        default_factory=list,
+        description="Files the agent added that can affect test collection or start-up "
+        "(new conftest.py, test config, sitecustomize/usercustomize, *.pth), deleted.",
     )
     source_files_changed: list[str] = Field(default_factory=list)
     missing_graded_tests: list[str] = Field(default_factory=list)

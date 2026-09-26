@@ -195,6 +195,7 @@ def solve(
 ) -> None:
     """Run the agent on one task: explore, fix, test in the sandbox, then grade."""
     from repair_agent.agent import load_task, solve_task
+    from repair_agent.eval.power import keep_awake
     from repair_agent.llm import create_provider
     from repair_agent.sandbox import SandboxError, Workspace
     from repair_agent.sandbox.images import task_sandbox
@@ -212,9 +213,12 @@ def solve(
     run_id = new_run_id()
     workspace = Workspace.from_directory(task_def.repo_dir(), patch=task_def.seed_patch)
     try:
-        with Tracer(
-            settings.runs_dir, run_id, task_def.id, secret_values=settings.secret_values()
-        ) as tracer:
+        with (
+            keep_awake(),
+            Tracer(
+                settings.runs_dir, run_id, task_def.id, secret_values=settings.secret_values()
+            ) as tracer,
+        ):
             typer.echo(f"run {run_id}: solving {task_def.id} with {settings.llm.model} ...")
             result = solve_task(
                 task_def,

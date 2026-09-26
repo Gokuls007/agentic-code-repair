@@ -116,7 +116,7 @@ def test_request_shape() -> None:
     assert params["output_config"] == {"effort": "high"}
     assert params["tools"] == [READ_TOOL.model_dump()]
     assert params["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-    assert "temperature" not in params
+    assert "temperature" not in params and "extra_body" not in params
     assert "timeout" not in params
 
 
@@ -140,7 +140,7 @@ def test_temperature_and_timeout_are_sent_when_set() -> None:
         tools=[],
         timeout_s=12.5,
     )
-    assert fake.calls[0]["temperature"] == 0.0
+    assert fake.calls[0]["extra_body"] == {"temperature": 0.0}
     assert fake.calls[0]["timeout"] == 12.5
 
 

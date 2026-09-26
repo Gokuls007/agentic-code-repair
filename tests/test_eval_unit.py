@@ -496,3 +496,13 @@ def test_existing_overrun_results_are_reclassified_and_rerun(tmp_path: Path) -> 
 def test_keep_awake_is_safe_to_use() -> None:
     with keep_awake() as supported:
         assert isinstance(supported, bool)
+
+
+def test_dependency_image_tag_depends_on_base_python_version() -> None:
+    from repair_agent.sandbox.images import repo_image_tag
+
+    repo = ROOT / "benchmark" / "repos" / "schedule"
+    a = repo_image_tag(repo, "base:1", "3.11.9")
+    b = repo_image_tag(repo, "base:1", "3.12.4")
+    assert a and b and a != b and a.startswith("repair-agent-sandbox-schedule:")
+    assert repo_image_tag(ROOT / "benchmark" / "repos" / "calc", "base:1", "3.11.9") is None

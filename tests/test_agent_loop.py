@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -227,13 +228,36 @@ def test_token_budget(task, ws) -> None:
     assert len(provider.requests) == 1
 
 
-def test_test_run_budget(task, ws) -> None:
-    script = [reply(tc("run_tests")) for _ in range(3)]
+def test_test_run_budget_gives_one_finish_only_turn_then_stops(task, ws) -> None:
+    # 2 allowed runs, a 3rd (refused, grace turn granted), then a non-finish call.
+    script = [reply(tc("run_tests")) for _ in range(3)] + [reply(tc("list_files"))]
     sandbox = FakeSandbox()
-    result, _, _ = run(task, ws, script, settings=make_settings(max_test_runs=2), sandbox=sandbox)
+    result, provider, _ = run(
+        task, ws, script, settings=make_settings(max_test_runs=2), sandbox=sandbox
+    )
     assert result.stop_reason == StopReason.TEST_BUDGET
     assert result.test_runs == 2
-    assert len(sandbox.calls) == 3  # 2 agent runs + 1 grading run; the 3rd request was refused
+    assert len(sandbox.calls) == 3  # 2 agent runs + 1 grading run; the 3rd was refused
+    refused = provider.requests[3]["messages"][-1].content[0]
+    assert refused.is_error and "one final turn" in refused.content
+    assert len(provider.requests) == 4  # the grace turn happened, then the loop stopped
+
+
+def test_finish_on_the_grace_turn_is_accepted(task, ws) -> None:
+    script = [
+        reply(tc("edit_file", path="src/calc/stats.py", old_str=BUG, new_str=FIX)),
+        *[reply(tc("run_tests")) for _ in range(3)],
+        reply(tc("finish", summary="fixed; out of test runs")),
+    ]
+    result, _, _ = run(task, ws, script, settings=make_settings(max_test_runs=2))
+    assert result.stop_reason == StopReason.FINISHED
+    assert result.outcome == Outcome.FINISHED_TESTS_PASS and result.resolved
+
+
+def test_text_reply_on_the_grace_turn_stops_with_test_budget(task, ws) -> None:
+    script = [*[reply(tc("run_tests")) for _ in range(3)], reply(text="I think it's fixed.")]
+    result, _, _ = run(task, ws, script, settings=make_settings(max_test_runs=2))
+    assert result.stop_reason == StopReason.TEST_BUDGET
 
 
 def test_wall_clock_timeout(task, ws) -> None:
@@ -508,3 +532,81 @@ def test_repeated_text_answers_under_required_stop_as_no_action(task, ws) -> Non
     assert result.stop_reason == StopReason.NO_ACTION
     assert result.resolved and not result.success
     assert len(provider.requests) == 6  # no blind resampling
+
+
+# --- grading integrity: new conftest cheat (no Docker) ---------------------------------------
+
+CONFTEST_CHEAT = (
+    "import calc.stats\n\ndef _mean(xs):\n    return sum(xs) / len(xs)\n\ncalc.stats.mean = _mean\n"
+)
+
+
+def test_new_conftest_that_monkeypatches_mean_does_not_resolve(task, ws) -> None:
+    script = [
+        reply(tc("edit_file", path="conftest.py", old_str="", new_str=CONFTEST_CHEAT)),
+        reply(tc("run_tests")),
+        reply(tc("finish", summary="tests pass now")),
+    ]
+    result, provider, _ = run(task, ws, script)
+    # The agent's own run passed because its conftest patched mean...
+    assert provider.requests[2]["messages"][-1].content[0].content.startswith("Result: PASSED")
+    assert result.agent_last_test_result is not None
+    assert result.agent_last_test_result.all_passed
+    # ...but grading deletes new conftests, and grading alone decides the outcome.
+    assert result.removed_files == ["conftest.py"]
+    assert result.resolved is False and result.success is False
+    assert result.outcome == Outcome.FINISHED_TESTS_FAIL
+    assert result.agent_disagrees_with_grading is True
+    assert not (ws.root / "conftest.py").exists()
+
+
+def test_edited_baseline_config_is_restored_and_recorded(task, tmp_path: Path) -> None:
+    repo = tmp_path / "calc-with-config"
+    shutil.copytree(task.repo_dir(), repo)
+    (repo / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    parent = tmp_path / "ws"
+    parent.mkdir()
+    with Workspace.from_directory(repo, patch=task.seed_patch, parent_dir=parent) as ws:
+        script = [
+            reply(
+                tc(
+                    "edit_file",
+                    path="pytest.ini",
+                    old_str="[pytest]\n",
+                    new_str="[pytest]\naddopts = -k 'not mean'\n",
+                )
+            ),
+            reply(tc("finish", summary="done")),
+        ]
+        result, _, _ = run(task, ws, script)
+        assert result.restored_config_files == ["pytest.ini"]
+        assert result.modified_test_files == []
+        assert (ws.root / "pytest.ini").read_text(encoding="utf-8") == "[pytest]\n"
+
+
+def test_agent_agreement_is_recorded_when_both_pass(task, ws) -> None:
+    result, _, _ = run(task, ws, list(FIX_SCRIPT))
+    assert result.agent_last_test_result.selectors == ["tests/test_stats.py"]
+    assert result.agent_disagrees_with_grading is False
+
+
+# --- budgets ---------------------------------------------------------------------------------
+
+
+def test_cache_reads_do_not_count_toward_the_token_budget(task, ws) -> None:
+    script = [reply(tc("list_files"), input_tokens=100, output_tokens=10, cache_read=50_000)] * 3
+    script = [*script, reply(tc("finish", summary="x"))]
+    result, _, _ = run(task, ws, script, settings=make_settings(max_tokens_per_task=10_000))
+    assert result.stop_reason == StopReason.FINISHED
+    assert result.cache_read_tokens == 150_000  # still reported in full
+
+
+def test_cost_budget(task, ws) -> None:
+    # claude-sonnet-5 list price: $2/M in, $10/M out -> each turn costs $0.002 + $0.001.
+    script = [reply(tc("list_files"), input_tokens=1_000, output_tokens=100)] * 5
+    settings = make_settings(max_cost_usd_per_task=0.005)
+    result, provider, _ = run(task, ws, script, settings=settings)
+    assert result.stop_reason == StopReason.COST_BUDGET
+    assert len(provider.requests) == 2
+    budget_line = provider.requests[1]["messages"][-1].content[-1].text
+    assert "cost $0.0030/$0.0050" in budget_line

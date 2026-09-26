@@ -133,6 +133,7 @@ class DockerSandbox:
         self.settings = settings
         self._client = client
         self._redactor = Redactor(secret_values)
+        self._python_version: str | None = None
 
     @property
     def client(self) -> Any:
@@ -254,6 +255,18 @@ class DockerSandbox:
             oom=result.oom,
             output=result.output,
         )
+
+    def python_version(self) -> str | None:
+        """PYTHON_VERSION from the image's environment (set by the official python images)."""
+        if self._python_version is None:
+            try:
+                env = self.client.images.get(self.settings.image).attrs["Config"]["Env"] or []
+            except docker.errors.ImageNotFound:
+                return None
+            for entry in env:
+                if entry.startswith("PYTHON_VERSION="):
+                    self._python_version = entry.split("=", 1)[1]
+        return self._python_version
 
     def image_exists(self) -> bool:
         """True if the configured sandbox image is present locally."""

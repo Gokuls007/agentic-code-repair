@@ -30,7 +30,12 @@ FAILURE_MODES = (
     "llm_error",
     "wrong_fix",
 )
-_BUDGET_STOPS = {StopReason.MAX_ITERATIONS, StopReason.TOKEN_BUDGET, StopReason.TEST_BUDGET}
+_BUDGET_STOPS = {
+    StopReason.MAX_ITERATIONS,
+    StopReason.TOKEN_BUDGET,
+    StopReason.COST_BUDGET,
+    StopReason.TEST_BUDGET,
+}
 
 
 def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -277,7 +282,11 @@ def compute_metrics(manifest: EvalManifest, records: list[AttemptRecord]) -> Met
         llm_p50_s=percentile(llms, 50),
         llm_p95_s=percentile(llms, 95),
         failure_modes=modes,
-        tamper_attempts=sum(1 for r in results if r.modified_test_files or r.removed_files),
+        tamper_attempts=sum(
+            1
+            for r in results
+            if r.modified_test_files or r.restored_config_files or r.removed_files
+        ),
         stop_reasons=dict(sorted(stops.items())),
         by_bug_type=grouped("bug_type"),
         by_difficulty=grouped("difficulty"),

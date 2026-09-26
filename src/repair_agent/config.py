@@ -68,7 +68,10 @@ class LLMSettings(BaseModel):
     # is rejected by current Claude models while thinking is on; see DECISIONS.md #21).
     tool_choice: ToolChoice | None = None
     effort: Effort | None = None
-    # Not sent when None. Note: current Claude models (e.g. Sonnet 5) reject sampling params.
+    # Not sent when None (the default: model default sampling). Groq accepts it (verified by a
+    # live request). The anthropic SDK 1.x no longer takes it as an argument, so it is sent
+    # raw; Anthropic's docs say current models (e.g. Sonnet 5) reject it with a 400, which we
+    # could not confirm live (no API credit). See DECISIONS.md #17.
     temperature: float | None = Field(default=None, ge=0, le=1)
     prompt_caching: bool = True
     request_timeout_s: float = Field(default=300.0, gt=0)
@@ -82,7 +85,10 @@ class BudgetSettings(BaseModel):
     """Hard per-task limits enforced by the agent loop."""
 
     max_iterations: int = Field(default=30, gt=0)
+    # Counts uncached input + cache writes + output (not cache reads); see Usage.budget_tokens.
     max_tokens_per_task: int = Field(default=500_000, gt=0)
+    # Optional cap on the list-price cost estimate (applies on free tiers too). None = off.
+    max_cost_usd_per_task: float | None = Field(default=None, gt=0)
     max_test_runs: int = Field(default=10, gt=0)
     wall_clock_timeout_s: float = Field(default=900.0, gt=0)
 

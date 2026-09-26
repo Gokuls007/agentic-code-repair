@@ -13,7 +13,13 @@ from repair_agent.agent import prompts
 from repair_agent.agent.context import elide_old_tool_results
 from repair_agent.agent.grading import grade
 from repair_agent.agent.retry import call_with_retry
-from repair_agent.agent.state import AgentResult, AgentState, Outcome, StopReason
+from repair_agent.agent.state import (
+    AgentResult,
+    AgentState,
+    AgentTestSummary,
+    Outcome,
+    StopReason,
+)
 from repair_agent.agent.task import Task
 from repair_agent.config import Settings
 from repair_agent.llm.base import (
@@ -86,8 +92,11 @@ class AgentLoop:
         b = self.settings.budget
         if state.iteration >= b.max_iterations:
             return StopReason.MAX_ITERATIONS
-        if state.usage.total_tokens >= b.max_tokens_per_task:
+        if state.usage.budget_tokens >= b.max_tokens_per_task:
             return StopReason.TOKEN_BUDGET
+        cap = b.max_cost_usd_per_task
+        if cap is not None and (cost := self._list_cost(state)) is not None and cost >= cap:
+            return StopReason.COST_BUDGET
         if self.time_left() <= 0:
             return StopReason.TIMEOUT
         return None
@@ -99,11 +108,16 @@ class AgentLoop:
             max_iterations=b.max_iterations,
             test_runs=state.test_runs,
             max_test_runs=b.max_test_runs,
-            tokens=state.usage.total_tokens,
+            tokens=state.usage.budget_tokens,
             max_tokens=b.max_tokens_per_task,
             elapsed_s=self.elapsed(),
             timeout_s=b.wall_clock_timeout_s,
+            cost_usd=self._list_cost(state) if b.max_cost_usd_per_task is not None else None,
+            max_cost_usd=b.max_cost_usd_per_task,
         )
+
+    def _list_cost(self, state: AgentState) -> float | None:
+        return estimate_cost(state.usage, self.settings.llm.model, self.settings.pricing)
 
     # --- main loop ------------------------------------------------------------
 
@@ -136,6 +150,8 @@ class AgentLoop:
                             "message": str(exc),
                         },
                     )
+                    if state.finish_only:
+                        return LoopResult(StopReason.TEST_BUDGET, state, messages)
                     state.no_action_streak += 1
                     if state.no_action_streak >= 2:
                         return LoopResult(StopReason.NO_ACTION, state, messages)
@@ -186,6 +202,8 @@ class AgentLoop:
                 messages.append(self._results_message(results, state))
                 continue
             if not calls:
+                if state.finish_only:
+                    return LoopResult(StopReason.TEST_BUDGET, state, messages)
                 if response.stop_reason == LLMStop.MAX_TOKENS:
                     messages.append(_user_text(prompts.NUDGE_CUT_OFF))
                     continue
@@ -263,6 +281,7 @@ class AgentLoop:
         ordered = [c for c in calls if c.name != FINISH] + [c for c in calls if c.name == FINISH]
         by_id: dict[str, ToolResult] = {}
         stop: StopReason | None = None
+        final_turn = state.finish_only  # the test budget ran out last round: finish or stop
         for call in ordered:
             if self.time_left() <= 0:
                 return [], StopReason.TIMEOUT
@@ -270,19 +289,18 @@ class AgentLoop:
             self.tracer.log(
                 EventKind.TOOL_CALL, {"id": call.id, "name": call.name, "arguments": call.arguments}
             )
-            if call.name == RUN_TESTS and state.test_runs >= self.settings.budget.max_test_runs:
-                output = ToolOutput(
-                    content=(
-                        f"Error: test-run budget exhausted "
-                        f"({state.test_runs}/{self.settings.budget.max_test_runs} used)."
-                    ),
-                    is_error=True,
-                )
+            if final_turn and call.name != FINISH:
+                output = ToolOutput(content=prompts.FINISH_ONLY_REJECTED, is_error=True)
                 stop = stop or StopReason.TEST_BUDGET
+            elif call.name == RUN_TESTS and state.test_runs >= self.settings.budget.max_test_runs:
+                used = f"{state.test_runs}/{self.settings.budget.max_test_runs}"
+                output = ToolOutput(content=prompts.test_budget_exhausted(used), is_error=True)
+                state.finish_only = True
             else:
                 output = self.registry.execute(call)
                 if call.name == RUN_TESTS and not output.metadata.get("sandbox_error"):
                     state.test_runs += 1
+                    state.last_agent_tests = AgentTestSummary.from_metadata(output.metadata)
             self.tracer.log(
                 EventKind.TOOL_RESULT,
                 {
@@ -422,6 +440,13 @@ def solve_task(
         llm_s=round(state.llm_s, 2),
         final_tests=graded.final_tests if graded else None,
         modified_test_files=graded.modified_test_files if graded else [],
+        restored_config_files=graded.restored_config_files if graded else [],
+        agent_last_test_result=state.last_agent_tests,
+        agent_disagrees_with_grading=(
+            state.last_agent_tests.all_passed != graded.final_tests.all_passed
+            if graded and state.last_agent_tests
+            else None
+        ),
         removed_files=graded.removed_files if graded else [],
         source_files_changed=graded.source_files_changed if graded else [],
         missing_graded_tests=graded.missing_graded_tests if graded else [],

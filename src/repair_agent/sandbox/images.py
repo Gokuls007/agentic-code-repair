@@ -37,14 +37,19 @@ def dockerfile_for(base_image: str) -> str:
     return _RECIPE.format(base=base_image)
 
 
-def repo_image_tag(repo_dir: Path, base_image: str) -> str | None:
-    """Content-addressed tag for ``repo_dir``'s dependency image, or None if it has none."""
+def repo_image_tag(repo_dir: Path, base_image: str, python_version: str | None) -> str | None:
+    """Content-addressed tag for ``repo_dir``'s dependency image, or None if it has none.
+
+    The hash covers the recipe, the requirements, and the base image's Python version, so
+    a base image with a different interpreter gets freshly resolved wheels.
+    """
     requirements = Path(repo_dir) / REQUIREMENTS
     if not requirements.is_file():
         return None
     digest = hashlib.sha256()
     digest.update(dockerfile_for(base_image).encode("utf-8"))
     digest.update(requirements.read_bytes())
+    digest.update(f"python={python_version or 'unknown'}".encode())
     name = re.sub(r"[^a-z0-9]+", "-", Path(repo_dir).name.lower()).strip("-")
     return f"repair-agent-sandbox-{name}:{digest.hexdigest()[:12]}"
 
@@ -66,7 +71,7 @@ def _build_context(base_image: str, requirements: bytes) -> io.BytesIO:
 def sandbox_for_repo(sandbox: DockerSandbox, repo_dir: Path) -> DockerSandbox:
     """A sandbox using ``repo_dir``'s dependency image (built if missing), or ``sandbox``."""
     sandbox.ensure_image()
-    tag = repo_image_tag(repo_dir, sandbox.settings.image)
+    tag = repo_image_tag(repo_dir, sandbox.settings.image, sandbox.python_version())
     if tag is None:
         return sandbox
     derived = sandbox.with_image(tag)
