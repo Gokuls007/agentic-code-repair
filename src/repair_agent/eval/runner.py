@@ -136,13 +136,28 @@ def build_manifest(
     )
 
 
-def is_infra_failure(result: AgentResult) -> bool:
-    """The attempt says nothing about the agent: the provider or the sandbox failed.
+# The loop checks its wall-clock budget before every model call and tool call, and each
+# request is capped at the time left, so an attempt can only overrun by about one request
+# timeout plus grading. Anything well beyond that means the host was suspended (e.g. the
+# machine went to sleep mid-request), which says nothing about the agent.
+OVERRUN_GRACE_S = 600.0
+
+
+def wall_limit_s(wall_clock_timeout_s: float) -> float:
+    """Longest wall time an attempt can legitimately take under this budget."""
+    return wall_clock_timeout_s + OVERRUN_GRACE_S
+
+
+def is_infra_failure(result: AgentResult, wall_limit: float | None = None) -> bool:
+    """The attempt says nothing about the agent: the provider, sandbox, or host failed.
 
     LLM errors other than 400 (quota/rate limits, outages, auth, connectivity) are
     infrastructure; a 400 (e.g. unparseable model output after retries) is a model failure.
+    An attempt that ran far past its wall-clock budget (``wall_limit``) was suspended.
     """
     if result.stop_reason == StopReason.SANDBOX_ERROR or result.outcome == Outcome.NO_FINAL_TESTS:
+        return True
+    if wall_limit is not None and result.wall_s > wall_limit:
         return True
     return result.stop_reason == StopReason.LLM_ERROR and result.error_status != 400
 
@@ -186,6 +201,24 @@ class EvalRunner:
         self.solve = solve
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        self.wall_limit = wall_limit_s(settings.budget.wall_clock_timeout_s)
+
+    def reclassify_existing(self) -> list[str]:
+        """Move saved results that are infra failures under current rules aside, so they re-run.
+
+        Returns ``task run k`` labels of the attempts that were reclassified.
+        """
+        moved = []
+        for task in self.tasks:
+            for k in range(1, self.runs + 1):
+                path = attempt_dir(self.eval_dir, task.id, k) / RESULT
+                if not path.is_file():
+                    continue
+                result = AgentResult.model_validate_json(path.read_text(encoding="utf-8"))
+                if is_infra_failure(result, self.wall_limit):
+                    path.replace(path.with_name(INFRA_RESULT))
+                    moved.append(f"{task.id} run {k}")
+        return moved
 
     def pending(self) -> list[tuple[Task, int]]:
         """Attempts without a result, in round order (every task's run 1, then run 2, ...)."""
@@ -197,6 +230,8 @@ class EvalRunner:
         ]
 
     def run(self) -> RunSummary:
+        for label in self.reclassify_existing():
+            self.echo(f"[{label}] earlier result reclassified as infrastructure; re-running")
         todo = self.pending()
         summary = RunSummary(skipped=len(self.tasks) * self.runs - len(todo))
         if self.parallel == 1:
@@ -222,7 +257,7 @@ class EvalRunner:
         except (SandboxError, WorkspaceError) as exc:
             self._halt(summary, f"{task.id} run {k}: sandbox failure: {exc}")
             return
-        infra = is_infra_failure(result)
+        infra = is_infra_failure(result, self.wall_limit)
         if infra:
             (directory / RESULT).replace(directory / INFRA_RESULT)
         with self._lock:
@@ -301,18 +336,27 @@ class AttemptRecord(BaseModel):
     infra: bool = Field(default=False)
 
 
-def load_attempts(eval_dir: Path) -> list[AttemptRecord]:
-    """Every attempt directory's result (completed and infra), sorted by task and run."""
+def load_attempts(eval_dir: Path, wall_limit: float | None = None) -> list[AttemptRecord]:
+    """Every attempt directory's result (completed and infra), sorted by task and run.
+
+    With ``wall_limit``, saved results that overran it are treated as infra as well.
+    """
     records = []
     for directory in sorted(Path(eval_dir).glob("*/run-*")):
         run = int(directory.name.removeprefix("run-"))
-        for name, infra in ((RESULT, False), (INFRA_RESULT, True)):
+        for name, saved_as_infra in ((RESULT, False), (INFRA_RESULT, True)):
             path = directory / name
             if path.is_file():
                 result = AgentResult.model_validate_json(path.read_text(encoding="utf-8"))
+                infra = saved_as_infra or is_infra_failure(result, wall_limit)
                 records.append(
                     AttemptRecord(
                         task_id=directory.parent.name, run=run, result=result, infra=infra
                     )
                 )
     return records
+
+
+def manifest_wall_limit(manifest: EvalManifest) -> float:
+    """The overrun threshold implied by the budget recorded in an eval's manifest."""
+    return wall_limit_s(float(manifest.config["budget"]["wall_clock_timeout_s"]))

@@ -20,9 +20,11 @@ from repair_agent.eval.metrics import (
     percentile,
     wilson_interval,
 )
+from repair_agent.eval.power import keep_awake
 from repair_agent.eval.report import append_results_row, render_markdown, results_row
 from repair_agent.eval.runner import (
     INFRA_RESULT,
+    OVERRUN_GRACE_S,
     RESULT,
     AttemptRecord,
     EvalManifest,
@@ -32,6 +34,7 @@ from repair_agent.eval.runner import (
     build_manifest,
     is_infra_failure,
     load_attempts,
+    wall_limit_s,
 )
 from repair_agent.eval.validate import TaskValidation, ValidationCache, cache_key, write_test_lists
 from repair_agent.sandbox.workspace import Workspace
@@ -458,3 +461,38 @@ def test_manifest_resume_compatibility() -> None:
     assert problems and "budget" in problems[0]
     assert a.compatible_with(build_manifest("e1", Settings(), "groq", tasks, 1))
     assert a.compatible_with(build_manifest("e1", Settings(), "groq", [], 3))
+
+
+# --- host suspend / overrun ------------------------------------------------------------------
+
+
+def test_overrunning_the_wall_clock_budget_is_infra() -> None:
+    limit = wall_limit_s(1800)
+    assert limit == 1800 + OVERRUN_GRACE_S
+    slept = result("t", resolved=False, stop=StopReason.TIMEOUT, wall=26667.0)
+    normal_timeout = result("t", resolved=False, stop=StopReason.TIMEOUT, wall=1850.0)
+    assert is_infra_failure(slept, limit)
+    assert not is_infra_failure(normal_timeout, limit)
+    assert not is_infra_failure(slept)  # rule only applies when a limit is given
+
+
+def test_existing_overrun_results_are_reclassified_and_rerun(tmp_path: Path) -> None:
+    ok = result("x", resolved=True)
+    slept = result("x", resolved=False, stop=StopReason.TIMEOUT, wall=10909.0)
+    plan = {(t, 1): ok for t in ("calc-mean-001", "calc-median-002")}
+    runner, fake, _ = make_runner(tmp_path, plan, runs=1)
+    for task_id, r in (("calc-mean-001", ok), ("calc-median-002", slept)):
+        d = attempt_dir(runner.eval_dir, task_id, 1)
+        d.mkdir(parents=True)
+        (d / RESULT).write_text(r.model_dump_json(), encoding="utf-8")
+    # Reports on the old files already exclude the overrun attempt:
+    recs = load_attempts(runner.eval_dir, wall_limit_s(Settings().budget.wall_clock_timeout_s))
+    assert [r.infra for r in recs] == [False, True]
+    runner.run()
+    assert fake.calls == [("calc-median-002", 1)]
+    assert [r.infra for r in load_attempts(runner.eval_dir)] == [False, False]
+
+
+def test_keep_awake_is_safe_to_use() -> None:
+    with keep_awake() as supported:
+        assert isinstance(supported, bool)

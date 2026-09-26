@@ -425,3 +425,30 @@ covers every task.
 
 **Why.** Every number can be recomputed with `repair-agent report <id>` from the saved
 result files. None comes from logs or memory.
+## 27. Text-only answers under `tool_choice=required` are handled, not resampled (Phase 4)
+
+**Decision.** Groq rejects a text-only turn under `tool_choice=required` with 400
+`tool_use_failed` ("did not call a tool"). This is now its own error kind, `no_tool_call`.
+It is not retried. The model's text, which Groq returns as `failed_generation`, is kept as
+an assistant turn, followed by a nudge: call `finish` if done, otherwise continue. A second
+such turn in a row stops the loop with `no_action`.
+
+**Why.** The first real Phase 4 check showed `gpt-oss-120b` finishing correct fixes with a
+text summary. The retry layer re-sent the identical prompt up to 8 times, got the same
+answer each time, burned rate-limit waits and quota, and recorded `llm_error`. After the
+fix, every attempt in that check that resolved also ended cleanly with `finish`.
+
+## 28. Host sleep is prevented during evals, and detected afterwards (Phase 4)
+
+**Decision.**
+- **Prevention.** `repair-agent eval` holds `SetThreadExecutionState(ES_SYSTEM_REQUIRED)` on
+  Windows while it runs. On other platforms this is a no-op.
+- **Detection.** An attempt whose wall time exceeds its budget plus 600 s is classified as
+  infrastructure: excluded from metrics, and moved aside and re-run on resume. The loop checks
+  the budget before every call, so it can only overrun by about one request timeout plus
+  grading.
+
+**Why.** Two attempts in the first real check "timed out" after 3.0 h and 7.4 h, against a
+30-minute budget. The Windows power log shows the machine went to sleep at the exact second
+each request started and woke hours later. Scoring those as agent timeouts would have been
+a false failure mode.

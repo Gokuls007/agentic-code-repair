@@ -295,12 +295,14 @@ def run_eval(
     """Run every task N times (resumable) and write report.md / report.json."""
     from repair_agent.agent.task import load_tasks
     from repair_agent.eval.metrics import compute_metrics
+    from repair_agent.eval.power import keep_awake
     from repair_agent.eval.report import write_report
     from repair_agent.eval.runner import (
         EvalRunner,
         build_manifest,
         load_attempts,
         load_manifest,
+        manifest_wall_limit,
         new_eval_id,
         write_manifest,
     )
@@ -371,14 +373,19 @@ def run_eval(
         parallel=parallel,
         echo=typer.echo,
     )
+    for label in runner.reclassify_existing():
+        typer.echo(f"[{label}] earlier result reclassified as infrastructure; re-running")
     todo = len(runner.pending())
     typer.echo(
         f"{eval_id}: {len(tasks)} tasks x {runs} runs, {todo} attempt(s) to run "
         f"with {settings.llm.provider}/{settings.llm.model}"
     )
-    summary = runner.run()
+    with keep_awake() as awake:
+        if awake:
+            typer.echo("(system sleep is blocked while the eval runs)")
+        summary = runner.run()
 
-    metrics = compute_metrics(manifest, load_attempts(eval_dir))
+    metrics = compute_metrics(manifest, load_attempts(eval_dir, manifest_wall_limit(manifest)))
     md, _ = write_report(eval_dir, manifest, metrics)
     typer.echo(f"\nreport: {md}")
     typer.echo(
@@ -405,14 +412,14 @@ def report(
     """Recompute metrics from saved results and (re)write the report."""
     from repair_agent.eval.metrics import compute_metrics
     from repair_agent.eval.report import append_results_row, write_report
-    from repair_agent.eval.runner import load_attempts, load_manifest
+    from repair_agent.eval.runner import load_attempts, load_manifest, manifest_wall_limit
 
     eval_dir = get_settings().runs_dir / eval_id
     if not (eval_dir / "manifest.json").is_file():
         typer.echo(f"error: no eval {eval_id!r} found", err=True)
         raise typer.Exit(code=1)
     manifest = load_manifest(eval_dir)
-    metrics = compute_metrics(manifest, load_attempts(eval_dir))
+    metrics = compute_metrics(manifest, load_attempts(eval_dir, manifest_wall_limit(manifest)))
     md, js = write_report(eval_dir, manifest, metrics)
     typer.echo(md.read_text(encoding="utf-8"))
     typer.echo(f"\nwrote {md} and {js}")
