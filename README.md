@@ -4,9 +4,10 @@ An autonomous agent that takes a GitHub issue, explores the repository, writes a
 the tests inside a Docker sandbox, iterates on failures, and opens a pull request. It comes
 with an evaluation harness that measures how well the agent actually works.
 
-> **Status: Phase 2 of 6 (sandbox + tools).** Config, the LLM interface, tracing, the Docker
-> sandbox, and all six agent tools are done and tested. The agent loop comes next; `solve`
-> and `eval` are stubs for now.
+> **Status: Phase 3 of 6 (agent loop).** `repair-agent solve --task <yaml>` runs the full
+> loop: explore, fix, test in the sandbox, then grade with the original tests restored. It is
+> tested with a scripted LLM. The first real run is still pending: the API account had no
+> credit. `eval` comes in Phase 4.
 
 ## Setup
 
@@ -27,7 +28,7 @@ uv run repair-agent config           # show effective config (secrets masked)
 uv run repair-agent ping             # one tiny LLM request to check credentials
 uv run repair-agent sandbox build    # (re)build the sandbox image
 uv run repair-agent sandbox cleanup  # remove containers left by interrupted runs
-uv run repair-agent solve --task benchmark/tasks/<task>.yaml   # Phase 3
+uv run repair-agent solve --task benchmark/tasks/calc-mean-001.yaml [--keep-workspace]
 uv run repair-agent eval                                        # Phase 4
 ```
 
@@ -42,11 +43,11 @@ settings use the `REPAIR_` prefix with `__` for nesting, e.g. `REPAIR_LLM__MODEL
 
 ```mermaid
 flowchart LR
-    CLI[cli.py] -.-> Loop[agent/loop.py]
-    Loop -.->|neutral Message / ToolSpec| LLM[llm/base.py]
+    CLI[cli.py solve] --> Loop[agent/loop.py]
+    Loop -->|neutral Message / ToolSpec| LLM[llm/base.py]
     LLM --> A[llm/anthropic.py]
     LLM -.-> G[llm/groq.py]
-    Loop -.-> Reg[tools/ ToolRegistry]
+    Loop --> Reg[tools/ ToolRegistry]
     Reg --> FT[list / read / edit]
     Reg --> S[search_code: ripgrep]
     Reg --> RT[run_tests]
@@ -54,7 +55,9 @@ flowchart LR
     RT --> SB[sandbox/ DockerSandbox]
     WS -->|tar snapshot| SB
     SB --> C[[fresh container: no network, uid 1000, CPU/mem/PID limits]]
-    Loop -.-> Trace[tracing.py]
+    Loop --> Trace[tracing.py]
+    Loop --> Grade[agent/grading.py: restore tests, run suite]
+    Grade --> SB
     Trace --> Runs[(runs/run_id/task_id.jsonl)]
     Eval[eval/] -.-> Loop
 ```
@@ -98,10 +101,35 @@ truncation note.
 | `tracing.py` | Append-only JSONL trace per task, flushed per event, with secret redaction | 1 ✅ |
 | `sandbox/` | Host workspace (git), Docker sandbox, JUnit parsing | 2 ✅ |
 | `tools/` | Six agent tools + registry (validation, errors, truncation) | 2 ✅ |
-| `cli.py` | Typer CLI | 2 ✅ (`solve`/`eval` stubs) |
-| `agent/` | ReAct loop with budgets | 3 |
+| `cli.py` | Typer CLI | 3 ✅ (`eval` stub) |
+| `agent/` | ReAct loop, budgets, retries, caching, context elision, grading | 3 ✅ |
 | `eval/`, `benchmark/` | Benchmark tasks, runner, metrics, report | 4 |
 | `github/`, `dashboard/` | Issue → PR flow, FastAPI + React dashboard | 5 |
+
+### Agent loop
+
+Each iteration is one model call, then all of its tool calls. The results go back as a
+single message ending with a budget line, for example
+`[budget] iteration 7/30 · test runs 2/10 · tokens 41,200/500,000 · time 1m12s/15m00s`.
+
+- **Stop reasons:** `finished`, `max_iterations`, `token_budget`, `test_budget`, `timeout`,
+  `refusal`, `no_action`, `llm_error`, `sandbox_error`.
+- **Retries:** retryable API errors are retried with exponential backoff and jitter, and
+  the wait honors `retry-after`.
+- **Caching:** prompt caching covers the tools, system prompt, and history. Old tool results
+  are replaced with stubs once the context passes 60K tokens.
+- **Grading:** after the loop, original test files are restored and the full suite runs.
+  `resolved` requires every FAIL_TO_PASS and PASS_TO_PASS test to pass, so editing tests
+  can't count as a fix.
+
+Each attempt writes `runs/<run_id>/<task_id>.jsonl` (the trace) and
+`runs/<run_id>/<task_id>.result.json`, which records:
+- outcome, stop reason, and resolved
+- iterations, test runs, and tool calls
+- tokens (including cache), estimated cost, and timings
+- the model id returned by the API and the temperature sent
+- test files the agent edited
+- final per-test outcomes and the diff
 
 Design decisions and the alternatives considered are in [DECISIONS.md](DECISIONS.md).
 

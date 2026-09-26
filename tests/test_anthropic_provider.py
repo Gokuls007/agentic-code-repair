@@ -109,19 +109,55 @@ def test_request_shape() -> None:
     params = fake.calls[0]
     assert params["model"] == "claude-sonnet-5"
     assert params["max_tokens"] == 4096
-    assert params["system"] == "be careful"
+    assert params["system"] == [
+        {"type": "text", "text": "be careful", "cache_control": {"type": "ephemeral"}}
+    ]
+    assert params["cache_control"] == {"type": "ephemeral"}  # automatic history caching
     assert params["output_config"] == {"effort": "high"}
     assert params["tools"] == [READ_TOOL.model_dump()]
     assert params["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    assert "temperature" not in params
+    assert "timeout" not in params
 
 
 def test_omits_optional_params_when_unset() -> None:
     fake = FakeMessages(wire_response([{"type": "text", "text": "ok"}], "end_turn"))
-    make_provider(fake).complete(
+    make_provider(fake, prompt_caching=False).complete(
         system="s", messages=[Message(role="user", content=[TextBlock(text="hi")])], tools=[]
     )
-    assert "tools" not in fake.calls[0]
-    assert "output_config" not in fake.calls[0]
+    params = fake.calls[0]
+    assert "tools" not in params
+    assert "output_config" not in params
+    assert "cache_control" not in params
+    assert params["system"] == [{"type": "text", "text": "s"}]
+
+
+def test_temperature_and_timeout_are_sent_when_set() -> None:
+    fake = FakeMessages(wire_response([{"type": "text", "text": "ok"}], "end_turn"))
+    make_provider(fake, temperature=0.0).complete(
+        system="s",
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=[],
+        timeout_s=12.5,
+    )
+    assert fake.calls[0]["temperature"] == 0.0
+    assert fake.calls[0]["timeout"] == 12.5
+
+
+def test_retry_after_header_is_parsed() -> None:
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx2.Response(429, request=request, headers={"retry-after": "7"}, json={})
+    fake = FakeMessages(error=anthropic.APIStatusError("slow", response=response, body=None))
+    with pytest.raises(LLMError) as info:
+        make_provider(fake).complete(
+            system="s", messages=[Message(role="user", content=[TextBlock(text="hi")])], tools=[]
+        )
+    assert info.value.retryable and info.value.retry_after_s == 7.0
+
+
+def test_sdk_retries_are_disabled() -> None:
+    provider = AnthropicProvider(LLMSettings(), api_key="sk-ant-test-0000000000")
+    assert provider._client.max_retries == 0
 
 
 def test_replays_own_raw_blocks_and_serialises_tool_results() -> None:
@@ -202,7 +238,19 @@ def _status_error(status: int) -> anthropic.APIStatusError:
     return anthropic.APIStatusError("boom", response=response, body=None)
 
 
-@pytest.mark.parametrize(("status", "retryable"), [(400, False), (429, True), (529, True)])
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [
+        (400, False),
+        (401, False),
+        (404, False),
+        (408, True),
+        (409, True),
+        (429, True),
+        (500, True),
+        (529, True),
+    ],
+)
 def test_api_errors_become_llm_errors(status: int, retryable: bool) -> None:
     fake = FakeMessages(error=_status_error(status))
     with pytest.raises(LLMError) as info:

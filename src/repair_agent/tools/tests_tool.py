@@ -94,7 +94,9 @@ class RunTests(Tool):
         try:
             report = self.sandbox.run_pytest(self.root, selectors)
         except SandboxError as exc:
-            raise ToolError(f"sandbox failure, tests did not run: {exc}") from exc
+            raise ToolError(
+                f"sandbox failure, tests did not run: {exc}", metadata={"sandbox_error": True}
+            ) from exc
         s = self.sandbox.settings
         return ToolOutput(
             content=summarize(report, s.test_timeout_s, s.memory_mb),

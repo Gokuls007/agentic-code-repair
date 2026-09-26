@@ -13,6 +13,7 @@ from repair_agent.config import get_settings
 from repair_agent.llm.base import LLMError
 
 if TYPE_CHECKING:
+    from repair_agent.agent import AgentResult
     from repair_agent.sandbox import DockerSandbox
 
 app = typer.Typer(
@@ -126,10 +127,93 @@ def ping() -> None:
 @app.command()
 def solve(
     task: Annotated[Path, typer.Option(help="Path to a benchmark task YAML file.")],
+    keep_workspace: Annotated[
+        bool, typer.Option(help="Keep the working copy on disk after the run.")
+    ] = False,
 ) -> None:
-    """Run the agent on one task. (Implemented in Phase 3.)"""
-    typer.echo(f"solve is not implemented yet (Phase 3). Task: {task}", err=True)
-    raise typer.Exit(code=2)
+    """Run the agent on one task: explore, fix, test in the sandbox, then grade."""
+    from repair_agent.agent import load_task, solve_task
+    from repair_agent.llm import create_provider
+    from repair_agent.sandbox import SandboxError, Workspace
+    from repair_agent.tracing import Tracer, new_run_id
+
+    settings = get_settings()
+    try:
+        task_def = load_task(task)
+        provider = create_provider(settings)
+        sandbox = _sandbox()
+        sandbox.ensure_image()
+    except (OSError, ValueError, RuntimeError, NotImplementedError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    run_id = new_run_id()
+    workspace = Workspace.from_directory(task_def.repo_dir(), patch=task_def.seed_patch)
+    try:
+        with Tracer(
+            settings.runs_dir, run_id, task_def.id, secret_values=settings.secret_values()
+        ) as tracer:
+            typer.echo(f"run {run_id}: solving {task_def.id} with {settings.llm.model} ...")
+            result = solve_task(
+                task_def,
+                workspace,
+                provider=provider,
+                sandbox=sandbox,
+                settings=settings,
+                tracer=tracer,
+                run_id=run_id,
+            )
+    except SandboxError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        if keep_workspace:
+            typer.echo(f"workspace kept at {workspace.root}")
+        else:
+            workspace.cleanup()
+
+    _print_result(result, tracer.path)
+    raise typer.Exit(code=0 if result.resolved else 1)
+
+
+def _print_result(r: AgentResult, trace_path: Path) -> None:
+    """Human-readable summary of one solve run."""
+    cost = f"${r.cost_usd:.4f}" if r.cost_usd is not None else "n/a"
+    temperature = "default" if r.temperature is None else r.temperature
+    final = r.final_tests
+    tests = (
+        f"{final.passed} passed, {final.failed} failed, {final.errors} errors" if final else "n/a"
+    )
+    rows = [
+        ("outcome", f"{r.outcome} (stop: {r.stop_reason})"),
+        ("resolved", str(r.resolved)),
+        (
+            "model",
+            f"{r.model_id or r.model} (temperature: {temperature})",
+        ),
+        ("iterations", str(r.iterations)),
+        ("test runs", str(r.test_runs)),
+        ("tool calls", ", ".join(f"{k}={v}" for k, v in sorted(r.tool_calls.items()))),
+        (
+            "tokens",
+            f"in {r.tokens_in:,} · out {r.tokens_out:,} · cache read "
+            f"{r.cache_read_tokens:,} · cache write {r.cache_write_tokens:,}",
+        ),
+        ("cost (est.)", cost),
+        ("time", f"{r.wall_s:.1f}s wall, {r.llm_s:.1f}s in LLM"),
+        ("final tests", tests),
+        ("tests edited", ", ".join(r.modified_test_files) or "none"),
+    ]
+    if r.error:
+        rows.append(("error", r.error))
+    width = max(len(k) for k, _ in rows)
+    typer.echo("")
+    for key, value in rows:
+        typer.echo(f"{key:<{width}}  {value}")
+    typer.echo(f"{'trace':<{width}}  {trace_path}")
+    if r.finish_summary:
+        typer.echo(f"\nagent summary: {r.finish_summary}")
+    typer.echo("\n" + (r.diff or "(no changes)"))
 
 
 @app.command("eval")

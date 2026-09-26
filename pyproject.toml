@@ -9,6 +9,7 @@ dependencies = [
     "docker>=7.1",
     "pydantic>=2.9",
     "pydantic-settings>=2.7",
+    "pyyaml>=6.0.3",
     "typer>=0.12",
 ]
 
@@ -20,6 +21,7 @@ dev = [
     "httpx2>=2.0",  # the anthropic SDK's HTTP layer; tests build error responses with it
     "pytest>=8.3",
     "ruff>=0.7",
+    "types-pyyaml>=6.0.12.20260906",
 ]
 
 [build-system]

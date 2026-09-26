@@ -28,6 +28,8 @@ _STOP_REASONS: dict[str, StopReason] = {
     "max_tokens": StopReason.MAX_TOKENS,
     "refusal": StopReason.REFUSAL,
 }
+# 408 timeout, 409 conflict, 429 rate limit; all 5xx (incl. 529 overloaded) are retryable too.
+_RETRYABLE_STATUS = frozenset({408, 409, 429})
 
 
 class AnthropicProvider(LLMProvider):
@@ -38,11 +40,42 @@ class AnthropicProvider(LLMProvider):
     def __init__(self, settings: LLMSettings, api_key: str, client: Any | None = None):
         """Create the provider. ``client`` may be injected for testing."""
         self._settings = settings
+        # SDK retries are off: the agent retries itself so every attempt is traced
+        # and backoff respects the task's wall-clock budget.
         self._client = client or anthropic.Anthropic(
             api_key=api_key,
             timeout=settings.request_timeout_s,
-            max_retries=settings.max_retries,
+            max_retries=0,
         )
+
+    def build_params(
+        self,
+        *,
+        system: str,
+        messages: list[Message],
+        tools: list[ToolSpec],
+        max_output_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """The exact ``messages.create`` keyword arguments for this request."""
+        system_block: dict[str, Any] = {"type": "text", "text": system}
+        params: dict[str, Any] = {
+            "model": self._settings.model,
+            "max_tokens": max_output_tokens or self._settings.max_output_tokens,
+            "system": [system_block],
+            "messages": [self._to_wire(m) for m in messages],
+        }
+        if tools:
+            params["tools"] = [t.model_dump() for t in tools]
+        if self._settings.effort:
+            params["output_config"] = {"effort": self._settings.effort}
+        if self._settings.temperature is not None:
+            params["temperature"] = self._settings.temperature
+        if self._settings.prompt_caching:
+            # Tools render before system, so this marker caches tools + system prompt.
+            system_block["cache_control"] = {"type": "ephemeral"}
+            # Automatic breakpoint on the last block caches the growing history.
+            params["cache_control"] = {"type": "ephemeral"}
+        return params
 
     def complete(
         self,
@@ -51,26 +84,28 @@ class AnthropicProvider(LLMProvider):
         messages: list[Message],
         tools: list[ToolSpec],
         max_output_tokens: int | None = None,
+        timeout_s: float | None = None,
     ) -> LLMResponse:
         """Send one Messages API request and normalise the reply."""
-        params: dict[str, Any] = {
-            "model": self._settings.model,
-            "max_tokens": max_output_tokens or self._settings.max_output_tokens,
-            "system": system,
-            "messages": [self._to_wire(m) for m in messages],
-        }
-        if tools:
-            params["tools"] = [t.model_dump() for t in tools]
-        if self._settings.effort:
-            params["output_config"] = {"effort": self._settings.effort}
+        params = self.build_params(
+            system=system, messages=messages, tools=tools, max_output_tokens=max_output_tokens
+        )
+        if timeout_s is not None:
+            params["timeout"] = timeout_s
 
         started = time.perf_counter()
         try:
             response = self._client.messages.create(**params)
         except anthropic.APIStatusError as exc:
-            retryable = exc.status_code == 429 or exc.status_code >= 500
-            raise LLMError(str(exc), retryable=retryable, status_code=exc.status_code) from exc
-        except anthropic.APIConnectionError as exc:
+            status = exc.status_code
+            retryable = status in _RETRYABLE_STATUS or status >= 500
+            raise LLMError(
+                str(exc),
+                retryable=retryable,
+                status_code=status,
+                retry_after_s=_retry_after(exc),
+            ) from exc
+        except anthropic.APIConnectionError as exc:  # includes APITimeoutError
             raise LLMError(str(exc), retryable=True) from exc
         latency = time.perf_counter() - started
 
@@ -125,6 +160,15 @@ class AnthropicProvider(LLMProvider):
                 blocks.append(ToolCall(id=block.id, name=block.name, arguments=dict(block.input)))
         raw = [b.model_dump(mode="json", exclude_none=True) for b in content]
         return Message(role="assistant", content=blocks, provider=self.name, provider_raw=raw)
+
+
+def _retry_after(exc: anthropic.APIStatusError) -> float | None:
+    """Seconds from a numeric ``retry-after`` header, if the server sent one."""
+    value = exc.response.headers.get("retry-after") if exc.response is not None else None
+    try:
+        return float(value) if value is not None else None
+    except ValueError:
+        return None
 
 
 def _usage(usage: Any) -> Usage:

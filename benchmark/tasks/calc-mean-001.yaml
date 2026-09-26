@@ -1,0 +1,48 @@
+id: calc-mean-001
+repo: calc
+
+issue:
+  title: "mean() returns the wrong average"
+  body: |
+    I'm using `calc.mean` to average some measurements and the numbers it gives back
+    are too high.
+
+    ```python
+    >>> from calc import mean
+    >>> mean([1, 2, 3, 4])
+    3.3333333333333335
+    ```
+
+    I expected 2.5. It also crashes for a list with a single value:
+
+    ```python
+    >>> mean([5])
+    ZeroDivisionError: division by zero
+    ```
+
+    I expected 5.0 there. `median` gives the right answers for the same inputs.
+
+# Plants the bug in an otherwise-correct repo. Blank context lines may be written
+# without their leading space; the loader restores it.
+seed_patch: |
+  --- a/src/calc/stats.py
+  +++ b/src/calc/stats.py
+  @@ -1,7 +1,7 @@
+   def mean(xs):
+       if not xs:
+           raise ValueError("mean of empty sequence")
+  -    return sum(xs) / len(xs)
+  +    return sum(xs) / (len(xs) - 1)
+
+
+   def median(xs):
+
+# Grading only; never shown to the agent.
+fail_to_pass:
+  - tests/test_stats.py::test_mean_basic
+pass_to_pass:
+  - tests/test_stats.py::test_mean_empty_raises
+  - tests/test_stats.py::test_median
+  - tests/test_ops.py::test_add
+  - tests/test_ops.py::test_subtract
+  - tests/test_ops.py::test_clamp

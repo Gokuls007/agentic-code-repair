@@ -40,6 +40,8 @@ class EventKind(StrEnum):
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     ERROR = "error"
+    CONTEXT = "context"
+    GRADE = "grade"
     TASK_END = "task_end"
 
 

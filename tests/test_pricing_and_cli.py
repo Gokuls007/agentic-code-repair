@@ -84,6 +84,11 @@ def test_cli_ping_reports_api_errors_in_one_line(
     assert "Traceback" not in result.output
 
 
-def test_cli_unimplemented_commands_exit_nonzero() -> None:
-    assert runner.invoke(app, ["solve", "--task", "x.yaml"]).exit_code == 2
+def test_cli_eval_not_implemented_yet() -> None:
     assert runner.invoke(app, ["eval"]).exit_code == 2
+
+
+def test_cli_solve_missing_task_fails_cleanly() -> None:
+    result = runner.invoke(app, ["solve", "--task", "missing.yaml"])
+    assert result.exit_code == 1
+    assert "error:" in result.output

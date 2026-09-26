@@ -155,3 +155,107 @@ containers don't have. The benchmark repos are pure Python by design. Per-task i
 telling you. That corrupts diffs and makes exact-match edits fail. The CRLF test fixtures are
 generated at test time, because committed CRLF files would be normalized to LF and the tests
 would pass without testing anything.
+## 13. Loop and stop semantics (Phase 3)
+
+**Decision.** Each iteration is one model call followed by all of its tool calls. The
+results come back as one user message, with a one-line budget status appended; it's only
+ever appended, never edited, so it doesn't break caching.
+
+Stop reasons:
+- `finished`
+- `max_iterations`, `token_budget`, and `timeout`: checked before every model call
+  (`timeout` also before every tool call)
+- `test_budget`: the model asks for a test run beyond the limit; it gets an error result
+  and the loop ends
+- `refusal`
+- `no_action`: two text-only turns in a row, the first of which got a nudge
+- `llm_error`
+- `sandbox_error`
+
+A reply cut off at `max_tokens` gets a "continue" nudge, and any tool calls in it are
+answered with errors instead of being run, because their arguments may be incomplete. When
+several calls come in one turn, `finish` always runs last.
+
+**Why.** Every limit in the spec becomes a named, testable stop reason, and the eval can
+break failures down by it. The token budget counts all billed tokens, cached reads
+included. That's conservative, but it matches what a task really consumes.
+
+## 14. Prompt caching plus batched elision of old tool results (Phase 3)
+
+**Decision.**
+- The Anthropic provider puts one cache marker on the system block, which also covers the
+  tools because they are rendered before it. Top-level automatic caching covers the growing
+  history.
+- When a request's input exceeds `agent.context_elide_tokens` (60K), tool results older
+  than the last 4 turns are replaced with one-line stubs; `run_tests` stubs keep their
+  `Result:` line.
+- The issue, the assistant turns, and tool-call arguments are never touched.
+
+**Alternatives.** Anthropic's server-side context editing; summarizing old turns with an
+LLM; eliding on every turn.
+
+**Why.**
+- Caching is the cheapest cost lever. The tool definitions and system prompt are identical
+  on every call, and each turn resends the whole history.
+- Elision is a history edit, so it invalidates the cache after the edit point. Doing it in
+  batches, only when the threshold is crossed, keeps those cache misses rare.
+- Doing it client-side keeps behavior identical across providers, which matters for the
+  Groq comparison in Phase 6.
+
+## 15. Our own retry layer; SDK retries off (Phase 3)
+
+**Decision.** The SDK runs with `max_retries=0`. `agent/retry.py` retries errors marked
+retryable (408, 409, 429, 5xx, connection errors, timeouts) with exponential backoff and
+full jitter (2 s base, 30 s cap). A `retry-after` header sets a minimum wait. It never
+sleeps past the task's wall-clock deadline. Each retry is traced. Anything else stops the
+loop with `llm_error`, and the attempt is still graded and recorded.
+
+**Why.** Two retry layers multiply each other, and SDK retries don't show up in our trace.
+The wall-clock budget has to bound the backoff as well. Observed on the first real run: an
+exhausted-credit 400 was, correctly, not retried.
+
+## 16. `finish` triggers grading; grading restores original tests (Phase 3)
+
+**Decision.**
+- **Grading always runs** after the loop ends, whether through `finish` or another stop. It
+  uses the full suite, and those runs don't count against the agent's test budget. Outcomes
+  are `finished_tests_pass`, `finished_tests_fail`, `stopped_tests_pass`,
+  `stopped_tests_fail`, and `no_final_tests`.
+- **Test restore.** Before grading, every baseline file that is a graded test file or looks
+  like a test file (`tests/`, `test_*.py`, `*_test.py`, `conftest.py`) is reset to its
+  baseline content. The files the agent had changed are listed in `modified_test_files`.
+- **Resolved** means every FAIL_TO_PASS and PASS_TO_PASS test passes in that restored run.
+- **New test files** the agent adds stay in place.
+- **Diff.** `diff` is captured before the restore, so an attempt to edit tests stays visible.
+
+**Alternatives.** Trust the agent's last test run; reject `finish` when tests fail.
+
+**Why.** An agent can "resolve" a bug by weakening the test. A unit test and a real-Docker
+test both script exactly that cheat and confirm `resolved=False`. Rejecting `finish` is a
+behavior change and belongs in Phase 6, where it can be measured.
+
+**Known limitation.** A *new* file that monkeypatches the code, such as a new root
+`conftest.py`, isn't covered. Phase 4 could also discard new conftest files before grading.
+
+## 17. Temperature and model id recorded as sent and as returned (Phase 3)
+
+**Decision.**
+- `llm.temperature` defaults to `None`, meaning the parameter is not sent. Current Claude
+  models such as Sonnet 5 reject sampling parameters with a 400.
+- `AgentResult` records `temperature` as it was actually sent, plus both `model` (what was
+  requested) and `model_id` (what the API reported).
+
+**Why.** Reproducibility. The eval report can say exactly which model and sampling
+settings produced each number.
+
+## 18. Phase 4: per-repo dependency images (planned)
+
+The containers have no network, so third-party dependencies are baked into per-repo images
+at build time:
+- `FROM` the base sandbox image, running
+  `pip install --require-hashes --only-binary=:all: -r requirements.txt`. Wheels only, so no
+  package build code runs.
+- Tagged by a hash of the Dockerfile and requirements, and rebuilt only when those change.
+- A task can override the image. The repo itself is still loaded via PYTHONPATH.
+- The SWE-bench adapter, if built, would use its published images with the same run-time
+  restrictions.

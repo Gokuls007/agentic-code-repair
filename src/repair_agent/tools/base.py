@@ -17,7 +17,14 @@ from repair_agent.llm.base import ToolCall, ToolResult, ToolSpec
 
 
 class ToolError(Exception):
-    """An expected tool failure. The message is shown to the model verbatim."""
+    """An expected tool failure. The message is shown to the model verbatim.
+
+    ``metadata`` is passed through to the ToolOutput for the loop (never shown to the model).
+    """
+
+    def __init__(self, message: str, *, metadata: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.metadata = metadata or {}
 
 
 class ToolArgs(BaseModel):
@@ -107,7 +114,7 @@ class ToolRegistry:
         try:
             output = tool.run(args)
         except ToolError as exc:
-            return _error(str(exc))
+            return _error(str(exc), metadata=exc.metadata)
         except Exception as exc:
             return _error(
                 f"internal tool failure ({type(exc).__name__}: {exc})",

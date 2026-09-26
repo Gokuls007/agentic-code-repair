@@ -127,10 +127,18 @@ class LLMResponse(BaseModel):
 class LLMError(RuntimeError):
     """A provider call failed. ``retryable`` hints whether trying again may help."""
 
-    def __init__(self, message: str, *, retryable: bool, status_code: int | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        status_code: int | None = None,
+        retry_after_s: float | None = None,
+    ):
         super().__init__(message)
         self.retryable = retryable
         self.status_code = status_code
+        self.retry_after_s = retry_after_s
 
 
 class LLMProvider(ABC):
@@ -146,8 +154,11 @@ class LLMProvider(ABC):
         messages: list[Message],
         tools: list[ToolSpec],
         max_output_tokens: int | None = None,
+        timeout_s: float | None = None,
     ) -> LLMResponse:
         """Send the conversation and return the model's next turn.
+
+        ``timeout_s`` caps this one request (e.g. to the task's remaining wall-clock time).
 
         Raises:
             LLMError: if the provider call fails after the client's own retries.

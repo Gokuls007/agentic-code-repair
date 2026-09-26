@@ -43,8 +43,14 @@ class LLMSettings(BaseModel):
     model: str = "claude-sonnet-5"
     max_output_tokens: int = Field(default=16000, gt=0)
     effort: Effort | None = None
+    # Not sent when None. Note: current Claude models (e.g. Sonnet 5) reject sampling params.
+    temperature: float | None = Field(default=None, ge=0, le=1)
+    prompt_caching: bool = True
     request_timeout_s: float = Field(default=300.0, gt=0)
+    # Retries are done by the agent (agent/retry.py) so each attempt is traced.
     max_retries: int = Field(default=3, ge=0)
+    retry_base_delay_s: float = Field(default=2.0, gt=0)
+    retry_max_delay_s: float = Field(default=30.0, gt=0)
 
 
 class BudgetSettings(BaseModel):
@@ -54,6 +60,16 @@ class BudgetSettings(BaseModel):
     max_tokens_per_task: int = Field(default=500_000, gt=0)
     max_test_runs: int = Field(default=10, gt=0)
     wall_clock_timeout_s: float = Field(default=900.0, gt=0)
+
+
+class AgentSettings(BaseModel):
+    """Agent-loop behaviour beyond the hard budgets."""
+
+    tree_depth: int = Field(default=3, ge=1, le=5)
+    tree_max_entries: int = Field(default=200, gt=0)
+    # When a request's input exceeds this, old tool results are replaced with stubs.
+    context_elide_tokens: int = Field(default=60_000, gt=0)
+    keep_recent_turns: int = Field(default=4, ge=1)
 
 
 class ToolSettings(BaseModel):
@@ -122,6 +138,7 @@ class Settings(BaseSettings):
 
     llm: LLMSettings = Field(default_factory=LLMSettings)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
+    agent: AgentSettings = Field(default_factory=AgentSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     github: GitHubSettings = Field(default_factory=GitHubSettings)
