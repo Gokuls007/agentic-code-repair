@@ -58,6 +58,7 @@ class AgentResult(BaseModel):
     model: str = Field(description="Model requested in config.")
     model_id: str | None = Field(description="Exact model id returned by the API.")
     temperature: float | None = Field(description="Temperature sent; None = model default.")
+    tool_choice: str = Field(default="auto", description="tool_choice sent: auto or required.")
     started_at: datetime
     ended_at: datetime
 

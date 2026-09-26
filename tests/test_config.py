@@ -91,3 +91,15 @@ def test_allowlist_rejects_malformed_slugs(monkeypatch: pytest.MonkeyPatch, bad:
     monkeypatch.setenv("REPAIR_GITHUB__REPO_ALLOWLIST", bad)
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_tool_choice_defaults_per_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    llm = Settings().llm
+    assert llm.tool_choice is None
+    assert llm.tool_choice_for("groq") == "required"
+    assert llm.tool_choice_for("anthropic") == "auto"
+    monkeypatch.setenv("REPAIR_LLM__TOOL_CHOICE", "auto")
+    assert Settings().llm.tool_choice_for("groq") == "auto"
+    monkeypatch.setenv("REPAIR_LLM__TOOL_CHOICE", "any")
+    with pytest.raises(ValidationError):
+        Settings()

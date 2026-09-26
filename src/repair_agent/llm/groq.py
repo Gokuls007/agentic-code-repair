@@ -87,7 +87,8 @@ class GroqProvider(LLMProvider):
         params: dict[str, Any] = {"model": s.model, "messages": wire}
         if tools:
             params["tools"] = [_tool(t) for t in tools]
-            params["tool_choice"] = "auto"
+            # "required": the model must call a tool every turn (it stops via finish).
+            params["tool_choice"] = s.tool_choice_for(self.name)
         if s.temperature is not None:
             params["temperature"] = s.temperature
         if s.effort and s.model.startswith("openai/gpt-oss"):

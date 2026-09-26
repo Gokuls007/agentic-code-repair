@@ -17,6 +17,9 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 ProviderName = Literal["anthropic", "groq"]
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
+ToolChoice = Literal["auto", "required"]
+
+DEFAULT_TOOL_CHOICE: dict[str, ToolChoice] = {"groq": "required", "anthropic": "auto"}
 
 
 class ModelPrice(BaseModel):
@@ -55,6 +58,15 @@ class LLMSettings(BaseModel):
     min_output_tokens: int = Field(default=1024, gt=0)
     # Record Groq usage as $0.00 (free tier) while still reporting the list-price equivalent.
     groq_free_tier: bool = True
+
+    def tool_choice_for(self, provider: str) -> ToolChoice:
+        """The tool_choice ``provider`` sends: explicit setting, else that provider's default."""
+        return self.tool_choice or DEFAULT_TOOL_CHOICE.get(provider, "auto")
+
+    # "required" forces a tool call every turn, so the agent can only stop via finish.
+    # None = provider default: "required" for Groq, "auto" for Anthropic (forced tool use
+    # is rejected by current Claude models while thinking is on; see DECISIONS.md #21).
+    tool_choice: ToolChoice | None = None
     effort: Effort | None = None
     # Not sent when None. Note: current Claude models (e.g. Sonnet 5) reject sampling params.
     temperature: float | None = Field(default=None, ge=0, le=1)

@@ -305,3 +305,26 @@ ships a Groq profile. Anthropic remains fully supported: its profile is commente
 Only `tool_use_failed` was treated as retryable at the time, so the loop stopped with
 `llm_error` after the fix was already in and verified. That code is now retried too, with a
 test.
+## 21. `llm.tool_choice`: "required" on Groq, "auto" on Anthropic
+
+**Decision.** `REPAIR_LLM__TOOL_CHOICE` is `auto` or `required`. When unset, each provider
+uses its own default: `required` for Groq and `auto` for Anthropic.
+- **Groq** receives OpenAI-style `tool_choice: "required"`.
+- **Anthropic** receives `{"type": "any"}`.
+- It is only sent when tools are present; `ping` sends no tools. The value actually used is
+  recorded as `tool_choice` in `AgentResult`.
+
+**Why.**
+- **Groq.** The first real Groq run fixed the bug, then wrote its summary as plain text
+  instead of calling `finish`; that turn ended in `output_parse_failed`, as recorded in
+  RESULTS.md. With `required`, every turn is a tool call, so the only way to stop is
+  `finish`, which is what grading and the `success` metric expect.
+- **Anthropic.** Current Claude models reject forced tool use while thinking is on, and some
+  (Opus 5.5, Fable 5.1) reject `any` altogether. Claude also reliably calls `finish` with
+  `auto`.
+
+**Effect on the no-action logic.** The nudge-then-`no_action` path stays, as a safety net for
+a provider that returns a text-only turn anyway. It no longer shapes normal Groq behavior. The
+realistic failure mode under `required` is a model that keeps calling tools without
+finishing. That's bounded by `max_iterations`, the token budget, and the wall clock, and the
+eval breaks it down by stop reason.

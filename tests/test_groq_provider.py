@@ -109,7 +109,7 @@ def test_request_shape_and_no_caching_params() -> None:
             },
         }
     ]
-    assert params["tool_choice"] == "auto"
+    assert params["tool_choice"] == "required"  # Groq default: the agent stops only via finish
     assert params["reasoning_effort"] == "medium"
     assert "temperature" not in params
     assert "cache_control" not in json.dumps(params)  # prompt caching is Anthropic-only
@@ -322,3 +322,21 @@ def test_connection_errors_are_retryable() -> None:
 def test_sdk_retries_are_disabled() -> None:
     provider = GroqProvider(LLMSettings(), api_key="gsk_test_0000000000000000")
     assert provider._client.max_retries == 0
+
+
+# --- tool_choice ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("setting", "sent"), [(None, "required"), ("auto", "auto"), ("required", "required")]
+)
+def test_tool_choice_setting(setting: str | None, sent: str) -> None:
+    fake = FakeCompletions(completion(content="ok"))
+    make(fake, tool_choice=setting).complete(system="s", messages=[USER], tools=[READ_TOOL])
+    assert fake.calls[0]["tool_choice"] == sent
+
+
+def test_tool_choice_omitted_without_tools() -> None:
+    fake = FakeCompletions(completion(content="pong"))
+    make(fake, tool_choice="required").complete(system="s", messages=[USER], tools=[])
+    assert "tool_choice" not in fake.calls[0]

@@ -370,6 +370,7 @@ def solve_task(
         model=settings.llm.model,
         model_id=state.model_id,
         temperature=settings.llm.temperature,
+        tool_choice=settings.llm.tool_choice_for(provider.name),
         started_at=started_at,
         ended_at=datetime.now(UTC),
         stop_reason=result.stop_reason,

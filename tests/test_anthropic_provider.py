@@ -259,3 +259,16 @@ def test_api_errors_become_llm_errors(status: int, retryable: bool) -> None:
         )
     assert info.value.status_code == status
     assert info.value.retryable is retryable
+
+
+@pytest.mark.parametrize(
+    ("setting", "sent"), [(None, None), ("auto", None), ("required", {"type": "any"})]
+)
+def test_tool_choice_setting(setting: str | None, sent: dict | None) -> None:
+    fake = FakeMessages(wire_response([{"type": "text", "text": "ok"}], "end_turn"))
+    make_provider(fake, tool_choice=setting).complete(
+        system="s",
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=[READ_TOOL],
+    )
+    assert fake.calls[0].get("tool_choice") == sent

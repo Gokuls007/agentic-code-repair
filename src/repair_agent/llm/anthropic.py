@@ -66,6 +66,10 @@ class AnthropicProvider(LLMProvider):
         }
         if tools:
             params["tools"] = [t.model_dump() for t in tools]
+            if self._settings.tool_choice_for(self.name) == "required":
+                # Anthropic's "must call some tool". Not accepted by every model (e.g. with
+                # thinking on); the default for this provider is therefore "auto".
+                params["tool_choice"] = {"type": "any"}
         if self._settings.effort:
             params["output_config"] = {"effort": self._settings.effort}
         if self._settings.temperature is not None:

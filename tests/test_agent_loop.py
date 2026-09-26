@@ -439,3 +439,30 @@ def test_malformed_tool_json_gets_an_actionable_error(task, ws) -> None:
     _, provider, _ = run(task, ws, [reply(bad), reply(tc("finish", summary="x"))])
     out = provider.requests[1]["messages"][-1].content[0]
     assert out.is_error and "not valid JSON" in out.content
+
+
+def test_required_tool_choice_recorded_and_text_only_reply_still_handled(task, ws) -> None:
+    # With tool_choice=required a text-only turn should not happen; if a provider returns
+    # one anyway, the nudge/no_action safety net still ends the run cleanly.
+    settings = make_settings()
+    settings.llm = LLMSettings(provider="groq", model="openai/gpt-oss-120b")
+    provider = GroqScripted([reply(text="done?"), reply(text="done.")])
+    with Tracer(ws.root.parent / "runs", "run1", task.id) as tracer:
+        result = solve_task(
+            task,
+            ws,
+            provider=provider,
+            sandbox=FakeSandbox(),
+            settings=settings,
+            tracer=tracer,
+            run_id="run1",
+            clock=FakeClock(),
+            sleep=RecordingSleep(),
+        )
+    assert result.tool_choice == "required"
+    assert result.stop_reason == StopReason.NO_ACTION
+
+
+def test_default_tool_choice_recorded_for_other_providers(task, ws) -> None:
+    result, _, _ = run(task, ws, list(FIX_SCRIPT))
+    assert result.tool_choice == "auto"
