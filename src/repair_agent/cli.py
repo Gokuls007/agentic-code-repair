@@ -10,6 +10,7 @@ import typer
 
 from repair_agent import __version__
 from repair_agent.config import get_settings
+from repair_agent.llm.base import LLMError
 
 app = typer.Typer(
     name="repair-agent",
@@ -34,6 +35,20 @@ def show_config() -> None:
     typer.echo(json.dumps(dumped, indent=2))
 
 
+def _describe_llm_error(exc: LLMError, model: str) -> str:
+    """One-line, actionable explanation of a failed LLM call."""
+    status = exc.status_code
+    if status == 401:
+        return "authentication failed: check ANTHROPIC_API_KEY in .env"
+    if status == 403:
+        return "permission denied: this API key cannot use the requested resource"
+    if status == 404:
+        return f"model not found: {model!r} (check REPAIR_LLM__MODEL)"
+    if status is None:
+        return f"could not reach the API: {exc}"
+    return f"API error {status}: {exc}"
+
+
 @app.command()
 def ping() -> None:
     """Send one tiny request to the configured LLM to verify credentials (costs a few tokens)."""
@@ -47,12 +62,16 @@ def ping() -> None:
     except (RuntimeError, NotImplementedError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    response = provider.complete(
-        system="You are a connectivity check. Reply with the single word: pong",
-        messages=[Message(role="user", content=[TextBlock(text="ping")])],
-        tools=[],
-        max_output_tokens=1024,
-    )
+    try:
+        response = provider.complete(
+            system="You are a connectivity check. Reply with the single word: pong",
+            messages=[Message(role="user", content=[TextBlock(text="ping")])],
+            tools=[],
+            max_output_tokens=1024,
+        )
+    except LLMError as exc:
+        typer.echo(f"error: {_describe_llm_error(exc, settings.llm.model)}", err=True)
+        raise typer.Exit(code=1) from exc
     cost = estimate_cost(response.usage, settings.llm.model, settings.pricing)
     typer.echo(
         f"model={response.model} stop={response.stop_reason} reply={response.message.text!r}"

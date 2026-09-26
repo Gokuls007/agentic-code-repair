@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from repair_agent.cli import app
 from repair_agent.config import ModelPrice
-from repair_agent.llm.base import Usage
+from repair_agent.llm.base import LLMError, Usage
 from repair_agent.llm.pricing import estimate_cost
 
 PRICING = {"m": ModelPrice(input_per_mtok=2.0, output_per_mtok=10.0)}
@@ -60,6 +60,28 @@ def test_cli_ping_without_key_fails_cleanly() -> None:
     assert result.exit_code == 1
     assert "ANTHROPIC_API_KEY is not set" in result.output
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (401, "authentication failed: check ANTHROPIC_API_KEY"),
+        (404, "model not found"),
+        (None, "could not reach the API"),
+    ],
+)
+def test_cli_ping_reports_api_errors_in_one_line(
+    monkeypatch: pytest.MonkeyPatch, status: int | None, expected: str
+) -> None:
+    class FailingProvider:
+        def complete(self, **_: object) -> None:
+            raise LLMError("boom", retryable=False, status_code=status)
+
+    monkeypatch.setattr("repair_agent.llm.create_provider", lambda _settings: FailingProvider())
+    result = runner.invoke(app, ["ping"])
+    assert result.exit_code == 1
+    assert expected in result.output
+    assert "Traceback" not in result.output
 
 
 def test_cli_unimplemented_commands_exit_nonzero() -> None:
