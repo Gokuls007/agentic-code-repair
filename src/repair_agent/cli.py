@@ -313,7 +313,7 @@ def run_eval(
     from repair_agent.eval.validate import ValidationCache, ensure_validated
     from repair_agent.llm import create_provider
     from repair_agent.sandbox import SandboxError
-    from repair_agent.sandbox.images import task_sandbox
+    from repair_agent.sandbox.images import repo_image_tag, task_sandbox
 
     settings = get_settings()
     tasks = load_tasks(tasks_dir, filter_)
@@ -342,7 +342,17 @@ def run_eval(
 
     eval_id = resume or new_eval_id()
     eval_dir = settings.runs_dir / eval_id
-    manifest = build_manifest(eval_id, settings, provider.name, tasks, runs)
+    environment = {
+        "sandbox_image": base.settings.image,
+        "python_version": base.python_version(),
+        "dependency_images": {
+            t.repo: t.image
+            or repo_image_tag(t.repo_dir(), base.settings.image, base.python_version())
+            for t in tasks
+        },
+        "docker_server": base.client.version().get("Version"),
+    }
+    manifest = build_manifest(eval_id, settings, provider.name, tasks, runs, environment)
     if resume:
         if not (eval_dir / "manifest.json").is_file():
             typer.echo(f"error: no eval {resume!r} under {settings.runs_dir}", err=True)

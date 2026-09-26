@@ -506,3 +506,38 @@ def test_dependency_image_tag_depends_on_base_python_version() -> None:
     b = repo_image_tag(repo, "base:1", "3.12.4")
     assert a and b and a != b and a.startswith("repair-agent-sandbox-schedule:")
     assert repo_image_tag(ROOT / "benchmark" / "repos" / "calc", "base:1", "3.11.9") is None
+
+
+def test_manifest_records_effective_config_and_environment() -> None:
+    s = Settings()
+    s.budget.max_cost_usd_per_task = 0.05
+    tasks = [load_task(TASKS_DIR / "calc-mean-001.yaml")]
+    env = {"python_version": "3.11.9", "sandbox_image": "img", "dependency_images": {}}
+    m = build_manifest("e1", s, "groq", tasks, 3, env)
+    cfg = m.config
+    assert cfg["model"] == "openai/gpt-oss-120b" and cfg["tool_choice"] == "required"
+    assert cfg["groq_tpm_limit"] == 8000 and cfg["groq_free_tier"] is True
+    assert cfg["price"] == {"input_per_mtok": 0.15, "output_per_mtok": 0.60}
+    assert cfg["budget"]["max_cost_usd_per_task"] == 0.05
+    assert cfg["agent"]["context_elide_tokens"] == 60_000
+    assert cfg["tools"]["max_output_chars"] == 12_000
+    assert cfg["sandbox"]["image"] == s.sandbox.image
+    assert m.environment["python_version"] == "3.11.9"
+    # environment is informational: a different interpreter does not block resume...
+    other = build_manifest("e1", s, "groq", tasks, 3, {"python_version": "3.12.0"})
+    assert m.compatible_with(other) == []
+    # ...but a changed limit does.
+    s2 = Settings()
+    s2.tools.max_output_chars = 6000
+    assert m.compatible_with(build_manifest("e1", s2, "groq", tasks, 3))
+
+
+def test_report_lists_model_ids_and_disagreements() -> None:
+    recs = records()
+    recs[0].result.agent_disagrees_with_grading = True
+    m = compute_metrics(manifest(), recs)
+    assert m.model_ids == ["m"]
+    assert m.agent_grading_disagreements == ["a run 1"]
+    md = render_markdown(manifest(), m)
+    assert "Model ids returned by the API:** m" in md
+    assert "disagreed with grading: 1 (a run 1)" in md

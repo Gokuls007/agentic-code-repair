@@ -55,10 +55,22 @@ def render_markdown(manifest: EvalManifest, m: Metrics) -> str:
         f"- **Provider / model:** {cfg['provider']} / `{cfg['model']}` "
         f"(tool_choice: {cfg['tool_choice']}, effort: {cfg['effort'] or 'default'}, "
         f"temperature: {'default' if cfg['temperature'] is None else cfg['temperature']})",
+        f"- **Model ids returned by the API:** {', '.join(m.model_ids) or 'n/a'}",
+        f"- **Limits:** max output {cfg.get('max_output_tokens')} tokens, "
+        f"Groq TPM limit {cfg.get('groq_tpm_limit')}, context elision at "
+        f"{cfg['agent']['context_elide_tokens']:,} tokens (keep {cfg['agent']['keep_recent_turns']}"
+        f" turns), tool output {cfg['tools']['max_output_chars']:,} chars"
+        if "agent" in cfg
+        else "- **Limits:** n/a",
         f"- **Tasks x runs:** {len(manifest.tasks)} x {manifest.runs}",
         f"- **Budgets:** {cfg['budget']['max_iterations']} iterations, "
         f"{cfg['budget']['max_test_runs']} test runs, {cfg['budget']['max_tokens_per_task']:,} "
-        f"tokens, {cfg['budget']['wall_clock_timeout_s']:.0f}s per attempt",
+        f"tokens, {cfg['budget']['wall_clock_timeout_s']:.0f}s per attempt"
+        + (
+            f", ${cfg['budget']['max_cost_usd_per_task']} cost cap"
+            if cfg["budget"].get("max_cost_usd_per_task")
+            else ""
+        ),
         f"- **Code:** `{(manifest.git_sha or 'unknown')[:12]}`"
         + (" (working tree had uncommitted changes)" if manifest.git_dirty else ""),
         f"- **Started:** {manifest.created_at:%Y-%m-%d %H:%M} UTC",
@@ -110,6 +122,14 @@ def render_markdown(manifest: EvalManifest, m: Metrics) -> str:
         "| Mode | Attempts |",
         "|---|---|",
         *[f"| {mode} | {m.failure_modes.get(mode, 0)} |" for mode in FAILURE_MODES],
+        "",
+        f"Agent's own last test run disagreed with grading: {len(m.agent_grading_disagreements)}"
+        + (
+            f" ({', '.join(m.agent_grading_disagreements)})"
+            if m.agent_grading_disagreements
+            else ""
+        )
+        + ".",
         "",
         f"Stop reasons: {', '.join(f'{k}={v}' for k, v in m.stop_reasons.items()) or 'n/a'}. "
         f"Attempts that edited original tests or added collection-affecting files "

@@ -117,6 +117,10 @@ class GroupStats(BaseModel):
 class Metrics(BaseModel):
     planned_attempts: int
     valid_attempts: int
+    model_ids: list[str] = Field(default_factory=list, description="Model ids the API returned")
+    agent_grading_disagreements: list[str] = Field(
+        default_factory=list, description="'task run k' where the agent's last run disagreed"
+    )
     infra_attempts: int
     tasks_with_results: int
 
@@ -247,6 +251,12 @@ def compute_metrics(manifest: EvalManifest, records: list[AttemptRecord]) -> Met
     return Metrics(
         planned_attempts=len(manifest.tasks) * manifest.runs,
         valid_attempts=n,
+        model_ids=sorted({r.model_id for r in results if r.model_id}),
+        agent_grading_disagreements=[
+            f"{rec.task_id} run {rec.run}"
+            for rec in valid
+            if rec.result.agent_disagrees_with_grading
+        ],
         infra_attempts=len(records) - n,
         tasks_with_results=sum(1 for s in task_stats if s.attempts),
         resolved=resolved,

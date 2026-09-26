@@ -532,3 +532,28 @@ into budget failures.
   (read from the image's environment). `--only-binary` wheels are resolved for the
   interpreter they'll run on, and a base-image Python upgrade forces a rebuild. The
   validation cache key includes it too.
+## 33. Baseline runs on Groq's Developer tier with default limits
+
+**Decision.**
+- **Model.** The 27 × 3 baseline uses Groq `openai/gpt-oss-120b` on the Developer tier
+  (250K tokens/min, 1K requests/min).
+- **Free-tier workarounds removed.** Max output tokens go back to 16,000, and the TPM clamp
+  is 250,000 instead of 8,000. The context and tool limits are reset to their defaults:
+  elision at 60K tokens keeping 4 turns, 12,000-char tool output, 400-line pages, 100
+  search matches.
+- **Cost.** `groq_free_tier=false`, so `cost_usd` is what's charged, and there's a
+  `max_cost_usd_per_task` safety cap of $0.05.
+
+The eval manifest records all of this:
+- the git SHA and dirty flag;
+- the effective config snapshot: model, `tool_choice`, effort, temperature, output tokens,
+  Groq TPM and tier, retries, timeout, price, budgets, and agent, tool and sandbox limits;
+- an environment block: sandbox image, base Python version, per-repo dependency images,
+  and Docker version.
+
+The report adds the model ids the API actually returned.
+
+**Why.** The free-tier limits existed only to survive 8K tokens per minute. Leaving them in
+would handicap the agent and make the baseline a measure of truncation. Every
+free-tier-affected run so far was a smoke test, so nothing reported needs to be
+re-labelled.

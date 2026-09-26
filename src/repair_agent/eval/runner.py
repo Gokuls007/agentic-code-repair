@@ -61,6 +61,8 @@ class EvalManifest(BaseModel):
     git_dirty: bool | None = None
     config: dict[str, Any]
     tasks: dict[str, TaskMeta]
+    # Runtime facts (images, interpreter); recorded for reproducibility, not compared on resume.
+    environment: dict[str, Any] = Field(default_factory=dict)
 
     def compatible_with(self, other: EvalManifest) -> list[str]:
         """Reasons ``other`` cannot resume this eval (empty if compatible)."""
@@ -90,10 +92,15 @@ def config_snapshot(settings: Settings, provider_name: str) -> dict[str, Any]:
         "temperature": llm.temperature,
         "max_output_tokens": llm.max_output_tokens,
         "prompt_caching": llm.prompt_caching if provider_name == "anthropic" else None,
+        "groq_tpm_limit": llm.groq_tpm_limit if provider_name == "groq" else None,
+        "groq_free_tier": llm.groq_free_tier if provider_name == "groq" else None,
+        "max_retries": llm.max_retries,
+        "request_timeout_s": llm.request_timeout_s,
+        "price": price.model_dump() if (price := settings.pricing.get(llm.model)) else None,
         "budget": settings.budget.model_dump(),
         "agent": settings.agent.model_dump(),
         "tools": settings.tools.model_dump(),
-        "sandbox": settings.sandbox.model_dump(exclude={"image"}),
+        "sandbox": settings.sandbox.model_dump(),
     }
 
 
@@ -116,7 +123,12 @@ def git_state(cwd: Path | None = None) -> tuple[str | None, bool | None]:
 
 
 def build_manifest(
-    eval_id: str, settings: Settings, provider_name: str, tasks: list[Task], runs: int
+    eval_id: str,
+    settings: Settings,
+    provider_name: str,
+    tasks: list[Task],
+    runs: int,
+    environment: dict[str, Any] | None = None,
 ) -> EvalManifest:
     sha, dirty = git_state()
     return EvalManifest(
@@ -133,6 +145,7 @@ def build_manifest(
             )
             for t in tasks
         },
+        environment=environment or {},
     )
 
 
