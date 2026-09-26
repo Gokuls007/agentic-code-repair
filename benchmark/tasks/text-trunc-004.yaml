@@ -1,0 +1,64 @@
+id: text-trunc-004
+repo: textkit
+bug_type: off-by-one
+difficulty: easy
+
+issue:
+  title: 'truncate() returns text longer than the requested width'
+  body: |
+    ```python
+    >>> from textkit import truncate
+    >>> truncate("hello world", 8)
+    'hello wo…'
+    >>> len(_)
+    9
+    ```
+
+    The width is meant to be a maximum, including the ellipsis, so I expected an
+    8-character result like `'hello w…'`. Short strings that fit are returned unchanged.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/textkit/wrap.py
+  +++ b/src/textkit/wrap.py
+  @@ -23,4 +23,4 @@
+           return text
+       if width <= len(ellipsis):
+           return ellipsis[:width]
+  -    return text[: width - len(ellipsis)] + ellipsis
+  +    return text[: width - len(ellipsis) + 1] + ellipsis
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_wrap.py::test_truncate_cuts_with_ellipsis
+  - tests/test_wrap.py::test_truncate_never_exceeds_width
+pass_to_pass:
+  - tests/test_case.py::test_title_case_last_word_capitalized
+  - tests/test_case.py::test_title_case_normalizes_mixed_case
+  - tests/test_case.py::test_title_case_single_small_word
+  - tests/test_case.py::test_title_case_small_words
+  - tests/test_case.py::test_word_count
+  - tests/test_case.py::test_word_count_empty
+  - tests/test_case.py::test_word_count_mixed_whitespace
+  - tests/test_search.py::test_find_spans_whole_words_only
+  - tests/test_search.py::test_highlight_basic
+  - tests/test_search.py::test_highlight_case_insensitive
+  - tests/test_search.py::test_highlight_no_match
+  - tests/test_search.py::test_index_case_insensitive
+  - tests/test_search.py::test_index_lookup
+  - tests/test_search.py::test_index_unknown_term
+  - tests/test_search.py::test_tokenize_spans
+  - tests/test_slug.py::test_accents_transliterated
+  - tests/test_slug.py::test_basic
+  - tests/test_slug.py::test_custom_separator
+  - tests/test_slug.py::test_leading_and_trailing_punctuation
+  - tests/test_slug.py::test_only_punctuation
+  - tests/test_slug.py::test_punctuation_runs_collapse
+  - tests/test_wrap.py::test_truncate_short_text_unchanged
+  - tests/test_wrap.py::test_truncate_tiny_width
+  - tests/test_wrap.py::test_wrap_breaks_long_text
+  - tests/test_wrap.py::test_wrap_empty
+  - tests/test_wrap.py::test_wrap_invalid_width
+  - tests/test_wrap.py::test_wrap_keeps_overlong_word
+  - tests/test_wrap.py::test_wrap_line_that_fits_exactly

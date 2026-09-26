@@ -4,11 +4,10 @@ An autonomous agent that takes a GitHub issue, explores the repository, writes a
 the tests inside a Docker sandbox, iterates on failures, and opens a pull request. It comes
 with an evaluation harness that measures how well the agent actually works.
 
-> **Status: Phase 3 of 6 (agent loop).** `repair-agent solve --task <yaml>` runs the full
-> loop: explore, fix, test in the sandbox, then grade with the original tests restored.
-> Development runs on **Groq's free tier** (`openai/gpt-oss-120b`); Anthropic is still
-> supported. The first real smoke test resolved its task (see [RESULTS.md](RESULTS.md)).
-> `eval` comes in Phase 4.
+> **Status: Phase 4 of 6 (benchmark + eval).** A validated 27-task benchmark, tamper-proof
+> grading, a resumable `repair-agent eval` runner, and a metrics report. Development runs on
+> **Groq's free tier** (`openai/gpt-oss-120b`); Anthropic is still supported. Baseline
+> numbers are in [RESULTS.md](RESULTS.md) once a full eval has run.
 
 ## Setup
 
@@ -30,7 +29,10 @@ uv run repair-agent ping             # one tiny LLM request to check credentials
 uv run repair-agent sandbox build    # (re)build the sandbox image
 uv run repair-agent sandbox cleanup  # remove containers left by interrupted runs
 uv run repair-agent solve --task benchmark/tasks/calc-mean-001.yaml [--keep-workspace]
-uv run repair-agent eval                                        # Phase 4
+uv run repair-agent benchmark validate                 # prove every task is well-formed (no LLM)
+uv run repair-agent eval --runs 3                      # all tasks x 3 runs -> runs/eval-<id>/report.md
+uv run repair-agent eval --resume eval-<id> --runs 3   # continue after a crash or quota stop
+uv run repair-agent report eval-<id> [--append-results]
 ```
 
 ### Configuration
@@ -44,7 +46,7 @@ settings use the `REPAIR_` prefix with `__` for nesting, e.g. `REPAIR_LLM__MODEL
 
 ```mermaid
 flowchart LR
-    CLI[cli.py solve] --> Loop[agent/loop.py]
+    CLI[cli.py solve / eval] --> Loop[agent/loop.py]
     Loop -->|neutral Message / ToolSpec| LLM[llm/base.py]
     LLM --> A[llm/anthropic.py]
     LLM --> G[llm/groq.py]
@@ -57,10 +59,13 @@ flowchart LR
     WS -->|tar snapshot| SB
     SB --> C[[fresh container: no network, uid 1000, CPU/mem/PID limits]]
     Loop --> Trace[tracing.py]
-    Loop --> Grade[agent/grading.py: restore tests, run suite]
+    Loop --> Grade[agent/grading.py: restore tests + config, drop hooks, run graded ids]
     Grade --> SB
     Trace --> Runs[(runs/run_id/task_id.jsonl)]
-    Eval[eval/] -.-> Loop
+    Eval[eval/runner.py] --> Loop
+    Val[eval/validate.py] --> SB
+    Eval --> Rep[eval/metrics.py + report.py]
+    Runs --> Rep
 ```
 
 Solid arrows are built; dotted ones come in later phases.
@@ -102,9 +107,9 @@ truncation note.
 | `tracing.py` | Append-only JSONL trace per task, flushed per event, with secret redaction | 1 ✅ |
 | `sandbox/` | Host workspace (git), Docker sandbox, JUnit parsing | 2 ✅ |
 | `tools/` | Six agent tools + registry (validation, errors, truncation) | 2 ✅ |
-| `cli.py` | Typer CLI | 3 ✅ (`eval` stub) |
+| `cli.py` | Typer CLI: config, ping, sandbox, solve, benchmark validate, eval, report | 4 ✅ |
 | `agent/` | ReAct loop, budgets, retries, caching, context elision, grading | 3 ✅ |
-| `eval/`, `benchmark/` | Benchmark tasks, runner, metrics, report | 4 |
+| `eval/`, `benchmark/` | 27 tasks, validation gate, resumable runner, metrics, report | 4 ✅ |
 | `github/`, `dashboard/` | Issue → PR flow, FastAPI + React dashboard | 5 |
 
 ### Agent loop
@@ -119,9 +124,14 @@ single message ending with a budget line, for example
   the wait honors `retry-after`.
 - **Caching:** prompt caching covers the tools, system prompt, and history. Old tool results
   are replaced with stubs once the context passes 60K tokens.
-- **Grading:** after the loop, original test files are restored and the full suite runs.
-  `resolved` requires every FAIL_TO_PASS and PASS_TO_PASS test to pass, so editing tests
-  can't count as a fix.
+- **Grading:** after the loop, grading runs with protections against test tampering:
+  - original test and test-config files are restored;
+  - newly added collection hooks (`conftest.py`, pytest config, `sitecustomize.py`, `*.pth`)
+    are deleted;
+  - only the FAIL_TO_PASS + PASS_TO_PASS tests run.
+
+  `resolved` requires all of them to pass, so editing tests or monkeypatching from a new
+  file can't count as a fix.
 
 Each attempt writes `runs/<run_id>/<task_id>.jsonl` (the trace) and
 `runs/<run_id>/<task_id>.result.json`, which records:
@@ -147,8 +157,43 @@ Design decisions and the alternatives considered are in [DECISIONS.md](DECISIONS
 Switch providers with `REPAIR_LLM__PROVIDER` and `REPAIR_LLM__MODEL`; both profiles are in
 `.env.example`.
 
+## Benchmark
+
+27 seeded-bug tasks across 4 small repos. `schedule` depends on `python-dateutil`, which is
+baked into its own sandbox image at build time; test containers still have no network.
+
+| Repo | Tasks | Bug types |
+|---|---|---|
+| `calc` | 6 | off-by-one, wrong conditional, missing edge case, API misuse |
+| `textkit` | 7 | off-by-one, wrong conditional, missing edge case, API misuse, multi-file |
+| `inventory` | 7 | wrong conditional, missing edge case, API misuse, multi-file |
+| `schedule` | 7 | off-by-one, wrong conditional, missing edge case, API misuse, multi-file |
+
+Difficulty: 12 easy, 11 medium, 4 hard.
+
+Every task passes `repair-agent benchmark validate`, which proves each of the following
+before any agent runs:
+- the correct code passes its suite;
+- the seed patch fails exactly FAIL_TO_PASS and keeps PASS_TO_PASS passing;
+- grading marks the buggy code unresolved and the correct code resolved;
+- the issue describes symptoms only.
+
+### Metrics
+
+`report.md` includes:
+- **rates:** resolve rate with a 95% Wilson CI, pass@1, pass@3 (unbiased estimator),
+  success rate, and graded-test pass rate;
+- **variance:** per-run resolve rates (mean ± std) and flaky tasks;
+- **effort and cost:** iterations, test runs, tokens, cost charged and at list price, and
+  latency p50/p95;
+- **failure modes:** broke other tests, timeout, budget exceeded, gave up, LLM error, wrong
+  fix;
+- **breakdowns:** by bug type, difficulty and repo, plus a per-task ✓/✗ table.
+
+Attempts lost to infrastructure (quota, outages, Docker) are excluded and re-run on resume.
+
 ## Results
 
-One smoke-test run so far: Groq `gpt-oss-120b` resolved `calc-mean-001` in 10 iterations for
-$0.00 on the free tier. It didn't finish cleanly, though; details are in
-[RESULTS.md](RESULTS.md). Benchmark numbers start in Phase 4, and only from real runs.
+One smoke-test run so far: Groq `gpt-oss-120b` resolved `calc-mean-001` for $0.00 on the free
+tier, but didn't finish cleanly. Benchmark numbers go into [RESULTS.md](RESULTS.md), and only
+from real `eval` reports.

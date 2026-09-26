@@ -1,0 +1,59 @@
+id: inv-tax-002
+repo: inventory
+bug_type: api-misuse
+difficulty: medium
+
+issue:
+  title: 'Order totals are sometimes a cent short'
+  body: |
+    Totals are supposed to be rounded half-up to the cent. One $2.50 item with 7% tax:
+
+    ```python
+    >>> total([(Item("X-1", "thing", Decimal("2.50")), 1)], 0.07)
+    Decimal('2.67')
+    ```
+
+    2.50 × 1.07 is exactly 2.675, so I expected `Decimal('2.68')`. Most other totals
+    come out right.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/inventory/pricing.py
+  +++ b/src/inventory/pricing.py
+  @@ -22,7 +22,7 @@
+       base = subtotal(lines)
+       discounted = base - discount(base)
+       taxed = discounted * (1 + Decimal(str(tax_rate)))
+  -    return taxed.quantize(CENT, rounding=ROUND_HALF_UP)
+  +    return Decimal(str(round(float(taxed), 2)))
+   
+   
+   def format_money(amount):
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_pricing.py::test_total_rounds_half_up
+pass_to_pass:
+  - tests/test_pricing.py::test_discount_above_threshold
+  - tests/test_pricing.py::test_discount_at_threshold
+  - tests/test_pricing.py::test_format_money
+  - tests/test_pricing.py::test_no_discount_below_threshold
+  - tests/test_pricing.py::test_subtotal
+  - tests/test_pricing.py::test_total_applies_discount_then_tax
+  - tests/test_report.py::test_low_stock_filters_by_threshold
+  - tests/test_report.py::test_low_stock_report_format
+  - tests/test_report.py::test_low_stock_sorted_ignoring_case
+  - tests/test_report.py::test_stock_summary
+  - tests/test_report.py::test_stock_summary_lowercase_sku
+  - tests/test_report.py::test_threshold_is_inclusive
+  - tests/test_store.py::test_duplicate_sku_rejected
+  - tests/test_store.py::test_find_exact
+  - tests/test_store.py::test_find_is_case_insensitive
+  - tests/test_store.py::test_find_unknown
+  - tests/test_store.py::test_load_missing_file_gives_empty_inventory
+  - tests/test_store.py::test_remove_stock
+  - tests/test_store.py::test_remove_too_much_raises
+  - tests/test_store.py::test_restock_lowercase_sku
+  - tests/test_store.py::test_save_load_roundtrip
+  - tests/test_store.py::test_skus_are_normalized

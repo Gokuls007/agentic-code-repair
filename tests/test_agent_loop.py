@@ -135,7 +135,7 @@ def test_initial_prompt_and_feedback_shape(task, ws) -> None:
     results_msg = second[-1]
     assert results_msg.role == "user"
     assert isinstance(results_msg.content[0], ToolResult)
-    assert results_msg.content[0].content == "src/calc/stats.py:1:def mean(xs):"
+    assert results_msg.content[0].content == "src/calc/stats.py:4:def mean(xs):"
     budget = results_msg.content[-1]
     assert isinstance(budget, TextBlock)
     assert budget.text.startswith("[budget] iteration 1/30 · test runs 0/10 · tokens 1,100/")

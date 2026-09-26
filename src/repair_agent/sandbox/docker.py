@@ -147,6 +147,14 @@ class DockerSandbox:
                 ) from exc
         return self._client
 
+    def with_image(self, image: str) -> DockerSandbox:
+        """Same limits and Docker client, different image (e.g. a per-repo dependency image)."""
+        clone = DockerSandbox(
+            self.settings.model_copy(update={"image": image}), client=self._client
+        )
+        clone._redactor = self._redactor
+        return clone
+
     def container_kwargs(self, argv: Sequence[str]) -> dict[str, Any]:
         """The exact ``containers.create`` arguments. Security settings live here."""
         s = self.settings

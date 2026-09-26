@@ -36,6 +36,9 @@ packages = ["src/repair_agent"]
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+# Benchmark repos and fixtures are data: seed patches are exact diffs against them, so
+# they must never be reformatted or auto-fixed.
+extend-exclude = ["benchmark/repos", "tests/fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]

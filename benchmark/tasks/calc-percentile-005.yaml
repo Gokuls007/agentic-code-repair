@@ -1,0 +1,65 @@
+id: calc-percentile-005
+repo: calc
+bug_type: off-by-one
+difficulty: medium
+
+issue:
+  title: 'percentile() gives shifted results and fails at 100'
+  body: |
+    ```python
+    >>> from calc import percentile
+    >>> percentile([10, 20, 30, 40], 50)
+    30
+    >>> percentile([10, 20, 30, 40], 100)
+    IndexError: list index out of range
+    ```
+
+    The 50th percentile of that list should be 25 (the same as the median), and the
+    100th percentile should be the maximum, 40. `percentile(xs, 0)` does return 10.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/calc/stats.py
+  +++ b/src/calc/stats.py
+  @@ -42,7 +42,7 @@
+       if not 0 <= p <= 100:
+           raise ValueError("p must be between 0 and 100")
+       ordered = sorted(xs)
+  -    rank = (len(ordered) - 1) * p / 100
+  +    rank = len(ordered) * p / 100
+       low = math.floor(rank)
+       high = min(low + 1, len(ordered) - 1)
+       return ordered[low] + (ordered[high] - ordered[low]) * (rank - low)
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_stats.py::test_percentile_bounds
+  - tests/test_stats.py::test_percentile_interpolates
+  - tests/test_stats.py::test_percentile_median
+pass_to_pass:
+  - tests/test_ops.py::test_add
+  - tests/test_ops.py::test_clamp_above
+  - tests/test_ops.py::test_clamp_at_bounds
+  - tests/test_ops.py::test_clamp_below
+  - tests/test_ops.py::test_clamp_in_range
+  - tests/test_ops.py::test_clamp_invalid_bounds
+  - tests/test_ops.py::test_subtract
+  - tests/test_rounding.py::test_half_up_negative
+  - tests/test_rounding.py::test_half_up_to_integer
+  - tests/test_rounding.py::test_half_up_with_digits
+  - tests/test_rounding.py::test_no_rounding_needed
+  - tests/test_rounding.py::test_returns_int_without_digits
+  - tests/test_stats.py::test_mean_basic
+  - tests/test_stats.py::test_mean_empty_raises
+  - tests/test_stats.py::test_mean_single
+  - tests/test_stats.py::test_median_empty_raises
+  - tests/test_stats.py::test_median_even
+  - tests/test_stats.py::test_median_odd
+  - tests/test_stats.py::test_median_two_values
+  - tests/test_stats.py::test_percentile_invalid_p
+  - tests/test_stats.py::test_sample_variance_needs_two_values
+  - tests/test_stats.py::test_variance_empty_raises
+  - tests/test_stats.py::test_variance_population
+  - tests/test_stats.py::test_variance_sample
+  - tests/test_stats.py::test_variance_single_value_population

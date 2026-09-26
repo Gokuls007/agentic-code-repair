@@ -1,0 +1,66 @@
+id: text-slug-002
+repo: textkit
+bug_type: api-misuse
+difficulty: medium
+
+issue:
+  title: 'slugify() drops accented letters'
+  body: |
+    Accented characters disappear from slugs instead of becoming their plain letters:
+
+    ```python
+    >>> from textkit import slugify
+    >>> slugify("Café Déjà Vu")
+    'caf-dj-vu'
+    ```
+
+    I expected `'cafe-deja-vu'`. Plain ASCII titles work fine.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/textkit/slug.py
+  +++ b/src/textkit/slug.py
+  @@ -5,7 +5,7 @@
+   def slugify(text, sep="-"):
+       """URL slug: accents transliterated to ASCII, lowercase, and every run of
+       non-alphanumeric characters replaced by a single separator."""
+  -    normalized = unicodedata.normalize("NFKD", text)
+  +    normalized = unicodedata.normalize("NFC", text)
+       ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+       words = re.split(r"[^a-z0-9]+", ascii_text.lower())
+       return sep.join(w for w in words if w)
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_slug.py::test_accents_transliterated
+pass_to_pass:
+  - tests/test_case.py::test_title_case_last_word_capitalized
+  - tests/test_case.py::test_title_case_normalizes_mixed_case
+  - tests/test_case.py::test_title_case_single_small_word
+  - tests/test_case.py::test_title_case_small_words
+  - tests/test_case.py::test_word_count
+  - tests/test_case.py::test_word_count_empty
+  - tests/test_case.py::test_word_count_mixed_whitespace
+  - tests/test_search.py::test_find_spans_whole_words_only
+  - tests/test_search.py::test_highlight_basic
+  - tests/test_search.py::test_highlight_case_insensitive
+  - tests/test_search.py::test_highlight_no_match
+  - tests/test_search.py::test_index_case_insensitive
+  - tests/test_search.py::test_index_lookup
+  - tests/test_search.py::test_index_unknown_term
+  - tests/test_search.py::test_tokenize_spans
+  - tests/test_slug.py::test_basic
+  - tests/test_slug.py::test_custom_separator
+  - tests/test_slug.py::test_leading_and_trailing_punctuation
+  - tests/test_slug.py::test_only_punctuation
+  - tests/test_slug.py::test_punctuation_runs_collapse
+  - tests/test_wrap.py::test_truncate_cuts_with_ellipsis
+  - tests/test_wrap.py::test_truncate_never_exceeds_width
+  - tests/test_wrap.py::test_truncate_short_text_unchanged
+  - tests/test_wrap.py::test_truncate_tiny_width
+  - tests/test_wrap.py::test_wrap_breaks_long_text
+  - tests/test_wrap.py::test_wrap_empty
+  - tests/test_wrap.py::test_wrap_invalid_width
+  - tests/test_wrap.py::test_wrap_keeps_overlong_word
+  - tests/test_wrap.py::test_wrap_line_that_fits_exactly

@@ -1,0 +1,81 @@
+id: inv-sku-007
+repo: inventory
+bug_type: multi-file
+difficulty: hard
+
+issue:
+  title: "Lower-case SKUs aren't found"
+  body: |
+    SKUs are meant to be case-insensitive (`Item("abc-1", ...)` is stored as `ABC-1`),
+    but looking them up in lower case fails in several places:
+
+    ```python
+    >>> inv.find("abc-1")
+    None
+    >>> inv.restock("xyz-9", 5)
+    KeyError: 'xyz-9'
+    >>> stock_summary(inv, ["m-1"])
+    {'m-1': None}
+    ```
+
+    I expected the Widget item, a successful restock, and `{'m-1': 50}`. Upper-case
+    SKUs work everywhere.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/inventory/store.py
+  +++ b/src/inventory/store.py
+  @@ -25,7 +25,7 @@
+   
+       def find(self, sku):
+           """The item with this SKU (any capitalization), or None."""
+  -        return self._items.get(normalize_sku(sku))
+  +        return self._items.get(sku)
+   
+       def restock(self, sku, amount):
+           self._require(sku).quantity += amount
+  @@ -37,7 +37,7 @@
+           item.quantity -= amount
+   
+       def _require(self, sku):
+  -        item = self._items.get(normalize_sku(sku))
+  +        item = self._items.get(sku)
+           if item is None:
+               raise KeyError(sku)
+           return item
+  --- a/src/inventory/report.py
+  +++ b/src/inventory/report.py
+  @@ -14,4 +14,4 @@
+   def stock_summary(inventory, skus):
+       """Map each requested SKU (as given, any capitalization) to its quantity, or None."""
+       by_sku = {i.sku: i.quantity for i in inventory.items()}
+  -    return {s: by_sku.get(normalize_sku(s)) for s in skus}
+  +    return {s: by_sku.get(s) for s in skus}
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_report.py::test_stock_summary_lowercase_sku
+  - tests/test_store.py::test_find_is_case_insensitive
+  - tests/test_store.py::test_restock_lowercase_sku
+pass_to_pass:
+  - tests/test_pricing.py::test_discount_above_threshold
+  - tests/test_pricing.py::test_discount_at_threshold
+  - tests/test_pricing.py::test_format_money
+  - tests/test_pricing.py::test_no_discount_below_threshold
+  - tests/test_pricing.py::test_subtotal
+  - tests/test_pricing.py::test_total_applies_discount_then_tax
+  - tests/test_pricing.py::test_total_rounds_half_up
+  - tests/test_report.py::test_low_stock_filters_by_threshold
+  - tests/test_report.py::test_low_stock_report_format
+  - tests/test_report.py::test_low_stock_sorted_ignoring_case
+  - tests/test_report.py::test_stock_summary
+  - tests/test_report.py::test_threshold_is_inclusive
+  - tests/test_store.py::test_duplicate_sku_rejected
+  - tests/test_store.py::test_find_exact
+  - tests/test_store.py::test_find_unknown
+  - tests/test_store.py::test_load_missing_file_gives_empty_inventory
+  - tests/test_store.py::test_remove_stock
+  - tests/test_store.py::test_remove_too_much_raises
+  - tests/test_store.py::test_save_load_roundtrip
+  - tests/test_store.py::test_skus_are_normalized

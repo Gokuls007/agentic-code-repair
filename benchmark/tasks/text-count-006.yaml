@@ -1,0 +1,63 @@
+id: text-count-006
+repo: textkit
+bug_type: api-misuse
+difficulty: easy
+
+issue:
+  title: 'word_count() miscounts when there is extra whitespace'
+  body: |
+    ```python
+    >>> from textkit import word_count
+    >>> word_count("one two  three")
+    4
+    >>> word_count("")
+    1
+    ```
+
+    I expected 3 and 0. Text with single spaces between words is counted correctly.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/textkit/case.py
+  +++ b/src/textkit/case.py
+  @@ -18,4 +18,4 @@
+   
+   def word_count(text):
+       """Number of whitespace-separated words."""
+  -    return len(text.split())
+  +    return len(text.split(" "))
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_case.py::test_word_count
+  - tests/test_case.py::test_word_count_empty
+  - tests/test_case.py::test_word_count_mixed_whitespace
+pass_to_pass:
+  - tests/test_case.py::test_title_case_last_word_capitalized
+  - tests/test_case.py::test_title_case_normalizes_mixed_case
+  - tests/test_case.py::test_title_case_single_small_word
+  - tests/test_case.py::test_title_case_small_words
+  - tests/test_search.py::test_find_spans_whole_words_only
+  - tests/test_search.py::test_highlight_basic
+  - tests/test_search.py::test_highlight_case_insensitive
+  - tests/test_search.py::test_highlight_no_match
+  - tests/test_search.py::test_index_case_insensitive
+  - tests/test_search.py::test_index_lookup
+  - tests/test_search.py::test_index_unknown_term
+  - tests/test_search.py::test_tokenize_spans
+  - tests/test_slug.py::test_accents_transliterated
+  - tests/test_slug.py::test_basic
+  - tests/test_slug.py::test_custom_separator
+  - tests/test_slug.py::test_leading_and_trailing_punctuation
+  - tests/test_slug.py::test_only_punctuation
+  - tests/test_slug.py::test_punctuation_runs_collapse
+  - tests/test_wrap.py::test_truncate_cuts_with_ellipsis
+  - tests/test_wrap.py::test_truncate_never_exceeds_width
+  - tests/test_wrap.py::test_truncate_short_text_unchanged
+  - tests/test_wrap.py::test_truncate_tiny_width
+  - tests/test_wrap.py::test_wrap_breaks_long_text
+  - tests/test_wrap.py::test_wrap_empty
+  - tests/test_wrap.py::test_wrap_invalid_width
+  - tests/test_wrap.py::test_wrap_keeps_overlong_word
+  - tests/test_wrap.py::test_wrap_line_that_fits_exactly

@@ -328,3 +328,100 @@ a provider that returns a text-only turn anyway. It no longer shapes normal Groq
 realistic failure mode under `required` is a model that keeps calling tools without
 finishing. That's bounded by `max_iterations`, the token budget, and the wall clock, and the
 eval breaks it down by stop reason.
+## 22. Benchmark design: 27 seeded-bug tasks over 4 small repos (Phase 4)
+
+**Decision.**
+- **Repos.** Four small repos with **correct code checked in**: `calc`, `textkit`,
+  `inventory` (stdlib) and `schedule`, which needs `python-dateutil` and `six`.
+- **Tasks.** Each task is a YAML file with `bug_type`, `difficulty`, a symptom-only issue,
+  a `seed_patch` that plants one bug, and **measured** FAIL_TO_PASS / PASS_TO_PASS lists.
+- **Mix.** Off-by-one 6, wrong-conditional 5, missing-edge-case 6, API-misuse 7, multi-file
+  3. Easy 12, medium 11, hard 4.
+- **How the patches are made.** Seed patches are generated as exact diffs of string
+  replacements against the correct code, never hand-typed.
+
+**Alternatives.** Hand-written buggy repos, or real historical bugs (SWE-bench style).
+
+**Why.**
+- Checking in the correct code means the reference solution is the checked-in code itself,
+  so "the fix passes" can be proven mechanically.
+- Seeded patches keep every task independent: one repo, many bugs.
+- The test lists are *measured* by running the suite before and after the patch, not guessed.
+  That caught real propagation: the `mean` bug also breaks four `variance` tests, so
+  calc-mean-001 has 6 FAIL_TO_PASS tests, not 2.
+
+**Limits.** The tasks are small and synthetic, and the agent sees each repo in full. These
+numbers measure the loop and tools on self-contained bugs; they are not comparable to
+SWE-bench.
+
+## 23. Grading hardening: restore config, delete collection hooks, grade only graded ids (Phase 4)
+
+**Decision.** Before grading:
+1. Baseline test files and test-config files (`conftest.py`, `pytest.ini`, `tox.ini`,
+   `setup.cfg`, `pyproject.toml`) are restored.
+2. Newly added `conftest.py`, pytest/tox/setup config, `sitecustomize.py`,
+   `usercustomize.py` and `*.pth` files are deleted and listed in `removed_files`.
+3. pytest runs **only the FAIL_TO_PASS + PASS_TO_PASS node ids**.
+
+**Why.** Restoring edited tests (#16) wasn't enough. A new root `conftest.py`, a
+`sitecustomize.py` on `PYTHONPATH`, or a new test module that monkeypatches the code at
+import time could all make the graded tests pass without fixing anything. Grading only the
+graded ids means new test modules are never imported, so they can stay. All three cheats are
+real-Docker tests: in each one the agent's own test run passes, and grading says
+`resolved=False`.
+
+## 24. Benchmark validation gate (Phase 4)
+
+**Decision.** `repair-agent benchmark validate` proves, for every task, with no LLM:
+- the correct code passes its suite, the same way on 2 runs;
+- the seed patch applies and touches no test files;
+- FAIL_TO_PASS and PASS_TO_PASS exactly match what the patch changes;
+- `grade()` says the buggy code isn't resolved and the reverted patch is;
+- the issue has no leaks: no patched file name, no changed line of code, no cause hints.
+
+Results are cached by a content hash of the task file, repo tree and image, and `eval`
+refuses to start on an invalid or unvalidated task. A Docker test re-validates all 27 tasks
+in the project's own suite.
+
+**Why.** A broken task silently corrupts every metric computed from it. On first run the gate
+caught three corrupt seed patches (a YAML-stripped trailing blank line, now repaired from the
+hunk counts) and one leak-check false positive. After those fixes, all 27 tasks are valid.
+
+## 25. Eval runner: resumable, round-ordered, stops on infrastructure failures (Phase 4)
+
+**Decision.**
+- **Layout.** `runs/eval-<id>/manifest.json` records the config snapshot, git sha and dirty
+  flag, task hashes, and N. Each attempt gets `<task>/run-<k>/{trace.jsonl,result.json}`.
+- **Resume.** Attempts that already have `result.json` are skipped. An interrupted trace is
+  set aside as `trace.partial-*`. `--resume` refuses a changed config or task set unless
+  `--force` is given.
+- **Order.** Runs go in rounds: every task's run 1, then run 2, and so on.
+- **Concurrency.** Sequential by default; `--parallel N` is available.
+- **Infrastructure failures.** An attempt lost to infrastructure (an LLM error other than
+  400, meaning quota, rate limit, outage or auth; or a sandbox failure) is saved as
+  `result.infra.json`, excluded from metrics, and re-run on resume. The eval **stops** at
+  that point.
+
+**Why.** Groq's free tier caps `gpt-oss-120b` at about 200K tokens/day, so a full 81-attempt
+eval will be interrupted many times. Stopping on quota exhaustion, instead of recording
+dozens of fake failures, keeps the numbers honest. Round order means a partial eval still
+covers every task.
+
+## 26. Metric definitions (Phase 4)
+
+**Decision.**
+- **Resolve rate.** Resolved over valid attempts, with a 95% Wilson interval, which stays
+  meaningful at small n.
+- **pass@k.** The unbiased estimator 1 − C(n−c, k)/C(n, k), averaged over tasks, counting
+  only tasks with n ≥ k.
+- **Variance.** Per-run resolve rates with mean ± std, and a list of flaky tasks
+  (0 < c < n).
+- **Failure mode.** Each unresolved attempt gets the first match in this order:
+  `broke_other_tests`, `timeout`, `budget_exceeded`, `gave_up` (no source change, or a
+  no-action/refusal stop), `llm_error`, `wrong_fix`.
+- **Cost.** Reported both as charged ($0.00 on the free tier) and at list-price equivalent,
+  per resolved task.
+- **Tamper attempts.** Counted separately.
+
+**Why.** Every number can be recomputed with `repair-agent report <id>` from the saved
+result files. None comes from logs or memory.

@@ -84,8 +84,16 @@ def test_cli_ping_reports_api_errors_in_one_line(
     assert "Traceback" not in result.output
 
 
-def test_cli_eval_not_implemented_yet() -> None:
-    assert runner.invoke(app, ["eval"]).exit_code == 2
+def test_cli_eval_without_matching_tasks_fails_cleanly(tmp_path) -> None:
+    result = runner.invoke(app, ["eval", "--tasks-dir", str(tmp_path), "--filter", "nope-*"])
+    assert result.exit_code == 1
+    assert "no tasks match" in result.output
+
+
+def test_cli_report_unknown_eval_fails_cleanly() -> None:
+    result = runner.invoke(app, ["report", "eval-does-not-exist"])
+    assert result.exit_code == 1
+    assert "no eval" in result.output
 
 
 def test_cli_solve_missing_task_fails_cleanly() -> None:

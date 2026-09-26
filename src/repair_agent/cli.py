@@ -14,6 +14,7 @@ from repair_agent.llm.base import LLMError
 
 if TYPE_CHECKING:
     from repair_agent.agent import AgentResult
+    from repair_agent.agent.task import Task
     from repair_agent.sandbox import DockerSandbox
 
 app = typer.Typer(
@@ -23,6 +24,59 @@ app = typer.Typer(
 )
 sandbox_app = typer.Typer(help="Manage the Docker sandbox.", no_args_is_help=True)
 app.add_typer(sandbox_app, name="sandbox")
+benchmark_app = typer.Typer(help="Benchmark tasks.", no_args_is_help=True)
+app.add_typer(benchmark_app, name="benchmark")
+
+DEFAULT_TASKS_DIR = Path("benchmark/tasks")
+
+
+@benchmark_app.command("validate")
+def benchmark_validate(
+    tasks_dir: Annotated[Path, typer.Option(help="Directory of task YAML files.")] = (
+        DEFAULT_TASKS_DIR
+    ),
+    filter_: Annotated[str, typer.Option("--filter", help="Glob on task ids.")] = "*",
+    repeat: Annotated[int, typer.Option(help="Clean-suite runs for the flakiness check.")] = 2,
+    fill_tests: Annotated[
+        bool, typer.Option(help="Write measured FAIL_TO_PASS/PASS_TO_PASS into the YAML.")
+    ] = False,
+) -> None:
+    """Prove each task is well-formed, with no LLM: bug fails the right tests, fix passes."""
+    from repair_agent.agent.task import load_task, load_tasks
+    from repair_agent.eval.validate import ValidationCache, validate_task, write_test_lists
+    from repair_agent.sandbox import SandboxError
+
+    settings = get_settings()
+    tasks = load_tasks(tasks_dir, filter_)
+    if not tasks:
+        typer.echo(f"error: no tasks match {filter_!r} in {tasks_dir}", err=True)
+        raise typer.Exit(code=1)
+    sandbox = _sandbox()
+    try:
+        sandbox.ensure_image()
+    except SandboxError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    cache = ValidationCache(settings.runs_dir / "validation.json")
+
+    failures = 0
+    for task in tasks:
+        result = validate_task(task, sandbox, repeat=repeat)
+        if fill_tests and result.measured_fail_to_pass:
+            write_test_lists(task, result.measured_fail_to_pass, result.measured_pass_to_pass)
+            result = validate_task(load_task(task.source_path), sandbox, repeat=repeat)
+        cache.put(result)
+        status = "ok " if result.ok else "BAD"
+        typer.echo(
+            f"{status} {task.id:<22} {task.bug_type:<18} {task.difficulty:<6} "
+            f"f2p={len(result.measured_fail_to_pass):<2} p2p={len(result.measured_pass_to_pass):<3}"
+            f" tests={result.clean_tests:<3} {result.duration_s:5.1f}s"
+        )
+        for problem in result.problems:
+            typer.echo(f"      - {problem}")
+        failures += not result.ok
+    typer.echo(f"\n{len(tasks) - failures}/{len(tasks)} tasks valid")
+    raise typer.Exit(code=1 if failures else 0)
 
 
 def _sandbox() -> DockerSandbox:
@@ -143,14 +197,14 @@ def solve(
     from repair_agent.agent import load_task, solve_task
     from repair_agent.llm import create_provider
     from repair_agent.sandbox import SandboxError, Workspace
+    from repair_agent.sandbox.images import task_sandbox
     from repair_agent.tracing import Tracer, new_run_id
 
     settings = get_settings()
     try:
         task_def = load_task(task)
         provider = create_provider(settings)
-        sandbox = _sandbox()
-        sandbox.ensure_image()
+        sandbox = task_sandbox(_sandbox(), task_def.image, task_def.repo_dir())
     except (OSError, ValueError, RuntimeError, NotImplementedError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -226,13 +280,145 @@ def _print_result(r: AgentResult, trace_path: Path) -> None:
 
 @app.command("eval")
 def run_eval(
-    tasks_dir: Annotated[Path, typer.Option(help="Directory of task YAML files.")] = Path(
-        "benchmark/tasks"
+    tasks_dir: Annotated[Path, typer.Option(help="Directory of task YAML files.")] = (
+        DEFAULT_TASKS_DIR
     ),
+    runs: Annotated[int, typer.Option(min=1, help="Attempts per task.")] = 3,
+    filter_: Annotated[str, typer.Option("--filter", help="Glob on task ids.")] = "*",
+    resume: Annotated[str | None, typer.Option(help="Eval id to resume.")] = None,
+    force: Annotated[bool, typer.Option(help="Resume even if config/tasks changed.")] = False,
+    parallel: Annotated[int, typer.Option(min=1, help="Concurrent attempts.")] = 1,
+    skip_validation: Annotated[
+        bool, typer.Option(help="Skip the benchmark validation gate (debugging only).")
+    ] = False,
 ) -> None:
-    """Run the benchmark and write a report. (Implemented in Phase 4.)"""
-    typer.echo(f"eval is not implemented yet (Phase 4). Tasks: {tasks_dir}", err=True)
-    raise typer.Exit(code=2)
+    """Run every task N times (resumable) and write report.md / report.json."""
+    from repair_agent.agent.task import load_tasks
+    from repair_agent.eval.metrics import compute_metrics
+    from repair_agent.eval.report import write_report
+    from repair_agent.eval.runner import (
+        EvalRunner,
+        build_manifest,
+        load_attempts,
+        load_manifest,
+        new_eval_id,
+        write_manifest,
+    )
+    from repair_agent.eval.validate import ValidationCache, ensure_validated
+    from repair_agent.llm import create_provider
+    from repair_agent.sandbox import SandboxError
+    from repair_agent.sandbox.images import task_sandbox
+
+    settings = get_settings()
+    tasks = load_tasks(tasks_dir, filter_)
+    if not tasks:
+        typer.echo(f"error: no tasks match {filter_!r} in {tasks_dir}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        provider = create_provider(settings)
+        base = _sandbox()
+        base.ensure_image()
+    except (RuntimeError, NotImplementedError, SandboxError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if not skip_validation:
+        typer.echo(f"validating {len(tasks)} task(s) (cached results are reused) ...")
+        cache = ValidationCache(settings.runs_dir / "validation.json")
+        bad = [v for v in ensure_validated(tasks, base, cache) if not v.ok]
+        if bad:
+            for v in bad:
+                typer.echo(f"invalid task {v.task_id}: {'; '.join(v.problems)}", err=True)
+            typer.echo(
+                "fix these (see `repair-agent benchmark validate`) before evaluating.", err=True
+            )
+            raise typer.Exit(code=1)
+
+    eval_id = resume or new_eval_id()
+    eval_dir = settings.runs_dir / eval_id
+    manifest = build_manifest(eval_id, settings, provider.name, tasks, runs)
+    if resume:
+        if not (eval_dir / "manifest.json").is_file():
+            typer.echo(f"error: no eval {resume!r} under {settings.runs_dir}", err=True)
+            raise typer.Exit(code=1)
+        previous = load_manifest(eval_dir)
+        problems = previous.compatible_with(manifest)
+        if problems and not force:
+            typer.echo(
+                f"error: cannot resume {resume}: {'; '.join(problems)} (use --force)", err=True
+            )
+            raise typer.Exit(code=1)
+        manifest = previous
+    else:
+        write_manifest(eval_dir, manifest)
+
+    sandboxes: dict[str, DockerSandbox] = {}
+
+    def sandbox_for(task: Task) -> DockerSandbox:
+        """One sandbox (and dependency image) per repo, built on first use."""
+        key = task.image or task.repo
+        if key not in sandboxes:
+            sandboxes[key] = task_sandbox(base, task.image, task.repo_dir())
+        return sandboxes[key]
+
+    runner = EvalRunner(
+        settings=settings,
+        tasks=tasks,
+        eval_dir=eval_dir,
+        runs=runs,
+        provider=provider,
+        sandbox_for=sandbox_for,
+        parallel=parallel,
+        echo=typer.echo,
+    )
+    todo = len(runner.pending())
+    typer.echo(
+        f"{eval_id}: {len(tasks)} tasks x {runs} runs, {todo} attempt(s) to run "
+        f"with {settings.llm.provider}/{settings.llm.model}"
+    )
+    summary = runner.run()
+
+    metrics = compute_metrics(manifest, load_attempts(eval_dir))
+    md, _ = write_report(eval_dir, manifest, metrics)
+    typer.echo(f"\nreport: {md}")
+    typer.echo(
+        f"resolve rate {metrics.resolved}/{metrics.valid_attempts} "
+        f"of {metrics.planned_attempts} planned attempts"
+    )
+    if summary.stopped_reason:
+        typer.echo(f"stopped early: {summary.stopped_reason}", err=True)
+        typer.echo(
+            f"resume with: repair-agent eval --resume {eval_id} --runs {runs}"
+            + (f" --filter '{filter_}'" if filter_ != "*" else ""),
+            err=True,
+        )
+        raise typer.Exit(code=3)
+
+
+@app.command("report")
+def report(
+    eval_id: Annotated[str, typer.Argument(help="Eval id (directory name under runs/).")],
+    append_results: Annotated[
+        bool, typer.Option(help="Append this eval's headline row to RESULTS.md.")
+    ] = False,
+) -> None:
+    """Recompute metrics from saved results and (re)write the report."""
+    from repair_agent.eval.metrics import compute_metrics
+    from repair_agent.eval.report import append_results_row, write_report
+    from repair_agent.eval.runner import load_attempts, load_manifest
+
+    eval_dir = get_settings().runs_dir / eval_id
+    if not (eval_dir / "manifest.json").is_file():
+        typer.echo(f"error: no eval {eval_id!r} found", err=True)
+        raise typer.Exit(code=1)
+    manifest = load_manifest(eval_dir)
+    metrics = compute_metrics(manifest, load_attempts(eval_dir))
+    md, js = write_report(eval_dir, manifest, metrics)
+    typer.echo(md.read_text(encoding="utf-8"))
+    typer.echo(f"\nwrote {md} and {js}")
+    if append_results:
+        append_results_row(Path("RESULTS.md"), manifest, metrics)
+        typer.echo("appended a row to RESULTS.md")
 
 
 if __name__ == "__main__":

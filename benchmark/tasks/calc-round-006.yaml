@@ -1,0 +1,67 @@
+id: calc-round-006
+repo: calc
+bug_type: api-misuse
+difficulty: medium
+
+issue:
+  title: "round_half_up() doesn't round halves up"
+  body: |
+    `round_half_up` is documented to round halves away from zero, but:
+
+    ```python
+    >>> from calc import round_half_up
+    >>> round_half_up(2.5)
+    2
+    >>> round_half_up(-2.5)
+    -2
+    >>> round_half_up(0.125, 2)
+    0.12
+    ```
+
+    I expected 3, -3 and 0.13. Values that aren't exactly halfway round correctly.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/calc/rounding.py
+  +++ b/src/calc/rounding.py
+  @@ -6,6 +6,4 @@
+   
+       Returns an int when ndigits is 0, otherwise a float.
+       """
+  -    quantum = Decimal(1).scaleb(-ndigits)
+  -    result = Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP)
+  -    return float(result) if ndigits else int(result)
+  +    return round(value, ndigits) if ndigits else round(value)
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_rounding.py::test_half_up_negative
+  - tests/test_rounding.py::test_half_up_to_integer
+  - tests/test_rounding.py::test_half_up_with_digits
+pass_to_pass:
+  - tests/test_ops.py::test_add
+  - tests/test_ops.py::test_clamp_above
+  - tests/test_ops.py::test_clamp_at_bounds
+  - tests/test_ops.py::test_clamp_below
+  - tests/test_ops.py::test_clamp_in_range
+  - tests/test_ops.py::test_clamp_invalid_bounds
+  - tests/test_ops.py::test_subtract
+  - tests/test_rounding.py::test_no_rounding_needed
+  - tests/test_rounding.py::test_returns_int_without_digits
+  - tests/test_stats.py::test_mean_basic
+  - tests/test_stats.py::test_mean_empty_raises
+  - tests/test_stats.py::test_mean_single
+  - tests/test_stats.py::test_median_empty_raises
+  - tests/test_stats.py::test_median_even
+  - tests/test_stats.py::test_median_odd
+  - tests/test_stats.py::test_median_two_values
+  - tests/test_stats.py::test_percentile_bounds
+  - tests/test_stats.py::test_percentile_interpolates
+  - tests/test_stats.py::test_percentile_invalid_p
+  - tests/test_stats.py::test_percentile_median
+  - tests/test_stats.py::test_sample_variance_needs_two_values
+  - tests/test_stats.py::test_variance_empty_raises
+  - tests/test_stats.py::test_variance_population
+  - tests/test_stats.py::test_variance_sample
+  - tests/test_stats.py::test_variance_single_value_population

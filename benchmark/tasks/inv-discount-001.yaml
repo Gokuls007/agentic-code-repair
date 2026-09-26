@@ -1,0 +1,62 @@
+id: inv-discount-001
+repo: inventory
+bug_type: wrong-conditional
+difficulty: easy
+
+issue:
+  title: "Orders of exactly $100 don't get the discount"
+  body: |
+    Orders of $100.00 or more are supposed to get 10% off. An order of two $50.00 items
+    gets nothing:
+
+    ```python
+    >>> from decimal import Decimal
+    >>> from inventory.models import Item
+    >>> from inventory.pricing import total
+    >>> total([(Item("X-1", "thing", Decimal("50.00")), 2)], 0)
+    Decimal('100.00')
+    ```
+
+    I expected `Decimal('90.00')`. A $250.00 order is discounted correctly.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/inventory/pricing.py
+  +++ b/src/inventory/pricing.py
+  @@ -12,7 +12,7 @@
+   
+   def discount(amount):
+       """10% off orders of $100.00 or more."""
+  -    if amount >= DISCOUNT_THRESHOLD:
+  +    if amount > DISCOUNT_THRESHOLD:
+           return (amount * DISCOUNT_RATE).quantize(CENT, rounding=ROUND_HALF_UP)
+       return Decimal("0.00")
+   
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_pricing.py::test_discount_at_threshold
+  - tests/test_pricing.py::test_total_applies_discount_then_tax
+pass_to_pass:
+  - tests/test_pricing.py::test_discount_above_threshold
+  - tests/test_pricing.py::test_format_money
+  - tests/test_pricing.py::test_no_discount_below_threshold
+  - tests/test_pricing.py::test_subtotal
+  - tests/test_pricing.py::test_total_rounds_half_up
+  - tests/test_report.py::test_low_stock_filters_by_threshold
+  - tests/test_report.py::test_low_stock_report_format
+  - tests/test_report.py::test_low_stock_sorted_ignoring_case
+  - tests/test_report.py::test_stock_summary
+  - tests/test_report.py::test_stock_summary_lowercase_sku
+  - tests/test_report.py::test_threshold_is_inclusive
+  - tests/test_store.py::test_duplicate_sku_rejected
+  - tests/test_store.py::test_find_exact
+  - tests/test_store.py::test_find_is_case_insensitive
+  - tests/test_store.py::test_find_unknown
+  - tests/test_store.py::test_load_missing_file_gives_empty_inventory
+  - tests/test_store.py::test_remove_stock
+  - tests/test_store.py::test_remove_too_much_raises
+  - tests/test_store.py::test_restock_lowercase_sku
+  - tests/test_store.py::test_save_load_roundtrip
+  - tests/test_store.py::test_skus_are_normalized

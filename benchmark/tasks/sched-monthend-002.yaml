@@ -1,0 +1,69 @@
+id: sched-monthend-002
+repo: schedule
+bug_type: missing-edge-case
+difficulty: hard
+
+issue:
+  title: 'Monthly series starting on the 31st gets stuck on a shorter month'
+  body: |
+    ```python
+    >>> monthly(date(2024, 1, 31), 4)
+    [datetime.date(2024, 1, 31), datetime.date(2024, 2, 29), datetime.date(2024, 3, 29), datetime.date(2024, 4, 29)]
+    ```
+
+    After February the series stays on the 29th. I expected Jan 31, Feb 29, Mar 31,
+    Apr 30: the last day of each month when the month is shorter, otherwise the 31st.
+    A series starting on the 15th is fine.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/schedule/recur.py
+  +++ b/src/schedule/recur.py
+  @@ -4,7 +4,10 @@
+   def monthly(start, count):
+       """count dates one calendar month apart, keeping start's day of month where the month
+       allows it (Jan 31 -> Feb 29 -> Mar 31 -> Apr 30)."""
+  -    return [start + relativedelta(months=i) for i in range(count)]
+  +    dates = [start] if count else []
+  +    while len(dates) < count:
+  +        dates.append(dates[-1] + relativedelta(months=1))
+  +    return dates
+   
+   
+   def next_occurrence(start, after, months=1):
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_recur.py::test_monthly_from_month_end
+pass_to_pass:
+  - tests/test_business.py::test_add_business_days_skips_holidays
+  - tests/test_business.py::test_add_five_business_days
+  - tests/test_business.py::test_add_one_business_day_from_friday
+  - tests/test_business.py::test_add_zero_business_days_is_same_day
+  - tests/test_business.py::test_holiday_is_not_a_business_day
+  - tests/test_business.py::test_negative_days_rejected
+  - tests/test_business.py::test_weekdays_are_business_days
+  - tests/test_business.py::test_weekend_is_not_a_business_day
+  - tests/test_durations.py::test_case_and_whitespace
+  - tests/test_durations.py::test_combined_units
+  - tests/test_durations.py::test_invalid_durations[1h 30m]
+  - tests/test_durations.py::test_invalid_durations[1x]
+  - tests/test_durations.py::test_invalid_durations[5]
+  - tests/test_durations.py::test_invalid_durations[]
+  - tests/test_durations.py::test_invalid_durations[h1]
+  - tests/test_durations.py::test_single_unit
+  - tests/test_durations.py::test_time_until_aware_target
+  - tests/test_durations.py::test_time_until_naive_target
+  - tests/test_durations.py::test_time_until_with_explicit_now
+  - tests/test_parse.py::test_default_order_is_us
+  - tests/test_parse.py::test_european_order
+  - tests/test_parse.py::test_iso_dates_are_unambiguous
+  - tests/test_parse.py::test_unsupported_order_rejected
+  - tests/test_parse.py::test_us_order
+  - tests/test_recur.py::test_monthly_across_year_boundary
+  - tests/test_recur.py::test_monthly_keeps_day_of_month
+  - tests/test_recur.py::test_monthly_zero_count
+  - tests/test_recur.py::test_next_occurrence
+  - tests/test_recur.py::test_next_occurrence_is_strictly_after
+  - tests/test_recur.py::test_next_occurrence_keeps_timezone

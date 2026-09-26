@@ -1,0 +1,59 @@
+id: inv-report-006
+repo: inventory
+bug_type: api-misuse
+difficulty: easy
+
+issue:
+  title: "Low-stock report isn't in alphabetical order"
+  body: |
+    With items named "apple" and "Zebra" both low on stock:
+
+    ```python
+    >>> print(low_stock_report(inv))
+    Zebra (Z-1): 1
+    apple (A-1): 2
+    ```
+
+    I expected alphabetical order regardless of capitalization, so "apple" first.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/inventory/report.py
+  +++ b/src/inventory/report.py
+  @@ -4,7 +4,7 @@
+   def low_stock(inventory, threshold=5):
+       """Items with quantity at or below threshold, sorted by name ignoring case."""
+       items = [i for i in inventory.items() if i.quantity <= threshold]
+  -    return sorted(items, key=lambda i: i.name.casefold())
+  +    return sorted(items, key=lambda i: i.name)
+   
+   
+   def low_stock_report(inventory, threshold=5):
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_report.py::test_low_stock_filters_by_threshold
+  - tests/test_report.py::test_low_stock_report_format
+  - tests/test_report.py::test_low_stock_sorted_ignoring_case
+pass_to_pass:
+  - tests/test_pricing.py::test_discount_above_threshold
+  - tests/test_pricing.py::test_discount_at_threshold
+  - tests/test_pricing.py::test_format_money
+  - tests/test_pricing.py::test_no_discount_below_threshold
+  - tests/test_pricing.py::test_subtotal
+  - tests/test_pricing.py::test_total_applies_discount_then_tax
+  - tests/test_pricing.py::test_total_rounds_half_up
+  - tests/test_report.py::test_stock_summary
+  - tests/test_report.py::test_stock_summary_lowercase_sku
+  - tests/test_report.py::test_threshold_is_inclusive
+  - tests/test_store.py::test_duplicate_sku_rejected
+  - tests/test_store.py::test_find_exact
+  - tests/test_store.py::test_find_is_case_insensitive
+  - tests/test_store.py::test_find_unknown
+  - tests/test_store.py::test_load_missing_file_gives_empty_inventory
+  - tests/test_store.py::test_remove_stock
+  - tests/test_store.py::test_remove_too_much_raises
+  - tests/test_store.py::test_restock_lowercase_sku
+  - tests/test_store.py::test_save_load_roundtrip
+  - tests/test_store.py::test_skus_are_normalized

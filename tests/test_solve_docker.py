@@ -55,7 +55,7 @@ def test_scripted_fix_resolves_in_real_sandbox(
     assert result.stop_reason == StopReason.FINISHED
     assert result.outcome == Outcome.FINISHED_TESTS_PASS
     assert result.resolved and result.test_runs == 2
-    assert result.final_tests.passed == 6
+    assert result.final_tests.passed == len(load_task(TASK_PATH).graded_tests)
 
 
 def test_test_edit_cheat_is_not_resolved_in_real_sandbox(

@@ -124,6 +124,17 @@ class Workspace:
         out = git(self.root, "diff", "--name-only", self.baseline, "--", *paths)
         return sorted(set(out.splitlines()))
 
+    def all_changed_files(self) -> list[str]:
+        """Every path that differs from the baseline: modified, deleted, or added."""
+        git(self.root, "add", "--intent-to-add", "-A")
+        return sorted(set(git(self.root, "diff", "--name-only", self.baseline).splitlines()))
+
+    def added_files(self) -> list[str]:
+        """Paths that exist now but not at the baseline."""
+        git(self.root, "add", "--intent-to-add", "-A")
+        out = git(self.root, "diff", "--name-only", "--diff-filter=A", self.baseline)
+        return sorted(set(out.splitlines()))
+
     def restore(self, paths: list[str]) -> None:
         """Reset ``paths`` (which must exist at the baseline) to their baseline content."""
         if paths:

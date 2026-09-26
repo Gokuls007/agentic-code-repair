@@ -1,0 +1,63 @@
+id: sched-dayfirst-006
+repo: schedule
+bug_type: api-misuse
+difficulty: medium
+
+issue:
+  title: 'Day-first (DMY) date parsing reads the month first'
+  body: |
+    ```python
+    >>> from schedule.parse import DateParser
+    >>> DateParser("DMY").parse("03/04/2024")
+    datetime.date(2024, 3, 4)
+    ```
+
+    With the DMY order, 03/04/2024 means 3 April 2024, so I expected
+    `datetime.date(2024, 4, 3)`. The default US order (MDY) works.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/schedule/parse.py
+  +++ b/src/schedule/parse.py
+  @@ -10,4 +10,4 @@
+           self.order = order
+   
+       def parse(self, text):
+  -        return parser.parse(text, dayfirst=self.order == "DMY").date()
+  +        return parser.parse(text).date()
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_parse.py::test_european_order
+pass_to_pass:
+  - tests/test_business.py::test_add_business_days_skips_holidays
+  - tests/test_business.py::test_add_five_business_days
+  - tests/test_business.py::test_add_one_business_day_from_friday
+  - tests/test_business.py::test_add_zero_business_days_is_same_day
+  - tests/test_business.py::test_holiday_is_not_a_business_day
+  - tests/test_business.py::test_negative_days_rejected
+  - tests/test_business.py::test_weekdays_are_business_days
+  - tests/test_business.py::test_weekend_is_not_a_business_day
+  - tests/test_durations.py::test_case_and_whitespace
+  - tests/test_durations.py::test_combined_units
+  - tests/test_durations.py::test_invalid_durations[1h 30m]
+  - tests/test_durations.py::test_invalid_durations[1x]
+  - tests/test_durations.py::test_invalid_durations[5]
+  - tests/test_durations.py::test_invalid_durations[]
+  - tests/test_durations.py::test_invalid_durations[h1]
+  - tests/test_durations.py::test_single_unit
+  - tests/test_durations.py::test_time_until_aware_target
+  - tests/test_durations.py::test_time_until_naive_target
+  - tests/test_durations.py::test_time_until_with_explicit_now
+  - tests/test_parse.py::test_default_order_is_us
+  - tests/test_parse.py::test_iso_dates_are_unambiguous
+  - tests/test_parse.py::test_unsupported_order_rejected
+  - tests/test_parse.py::test_us_order
+  - tests/test_recur.py::test_monthly_across_year_boundary
+  - tests/test_recur.py::test_monthly_from_month_end
+  - tests/test_recur.py::test_monthly_keeps_day_of_month
+  - tests/test_recur.py::test_monthly_zero_count
+  - tests/test_recur.py::test_next_occurrence
+  - tests/test_recur.py::test_next_occurrence_is_strictly_after
+  - tests/test_recur.py::test_next_occurrence_keeps_timezone

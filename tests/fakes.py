@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from repair_agent.agent.task import load_task
 from repair_agent.config import SandboxSettings
 from repair_agent.llm.base import (
     LLMProvider,
@@ -98,27 +99,26 @@ class ScriptedProvider(LLMProvider):
 
 Judge = Callable[[Path, list[str]], dict[str, Outcome]]
 
-CALC_TESTS = [
-    "tests/test_ops.py::test_add",
-    "tests/test_ops.py::test_subtract",
-    "tests/test_ops.py::test_clamp",
-    "tests/test_stats.py::test_mean_basic",
-    "tests/test_stats.py::test_mean_empty_raises",
-    "tests/test_stats.py::test_median",
-]
+_CALC_TASK = load_task(
+    Path(__file__).resolve().parents[1] / "benchmark" / "tasks" / "calc-mean-001.yaml"
+)
+CALC_TESTS = _CALC_TASK.graded_tests
+MEAN_DEPENDENT = set(_CALC_TASK.fail_to_pass)
 
 
 def calc_judge(root: Path, selectors: list[str]) -> dict[str, Outcome]:
-    """Decide calc outcomes from file contents, without executing any repo code.
+    """Decide calc-mean-001 outcomes from file contents, without executing any repo code.
 
-    test_mean_basic passes if mean is fixed, or if the test's expectation was edited
-    to match the buggy result (the cheat grading must defeat).
+    The tests that depend on mean() pass if mean is fixed, or if the test file's
+    expectation was edited to match the buggy result (the cheat grading must defeat).
     """
     stats = (root / "src/calc/stats.py").read_text(encoding="utf-8")
     test = (root / "tests/test_stats.py").read_text(encoding="utf-8")
     ok = "sum(xs) / len(xs)" in stats or "3.3333333333333335" in test
-    outcomes = {nid: Outcome.PASSED for nid in CALC_TESTS}
-    outcomes["tests/test_stats.py::test_mean_basic"] = Outcome.PASSED if ok else Outcome.FAILED
+    outcomes = {
+        nid: Outcome.PASSED if ok or nid not in MEAN_DEPENDENT else Outcome.FAILED
+        for nid in CALC_TESTS
+    }
     if selectors:
         outcomes = {k: v for k, v in outcomes.items() if any(k.startswith(s) for s in selectors)}
     return outcomes

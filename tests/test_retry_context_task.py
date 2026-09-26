@@ -129,8 +129,13 @@ def test_load_benchmark_task() -> None:
     task = load_task(TASK_PATH)
     assert task.id == "calc-mean-001"
     assert task.repo_dir() == ROOT / "benchmark" / "repos" / "calc"
-    assert task.graded_test_files == ["tests/test_ops.py", "tests/test_stats.py"]
-    assert len(task.graded_tests) == 6
+    assert task.graded_test_files == [
+        "tests/test_ops.py",
+        "tests/test_rounding.py",
+        "tests/test_stats.py",
+    ]
+    assert (task.bug_type, task.difficulty) == ("off-by-one", "easy")
+    assert "tests/test_stats.py::test_mean_basic" in task.fail_to_pass
 
 
 def test_issue_describes_symptom_not_cause() -> None:

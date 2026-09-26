@@ -1,0 +1,69 @@
+id: sched-bizdays-003
+repo: schedule
+bug_type: off-by-one
+difficulty: medium
+
+issue:
+  title: 'add_business_days() goes one day too far'
+  body: |
+    ```python
+    >>> from datetime import date
+    >>> from schedule.business import add_business_days
+    >>> add_business_days(date(2024, 3, 1), 1)   # Friday
+    datetime.date(2024, 3, 5)
+    >>> add_business_days(date(2024, 3, 1), 0)
+    datetime.date(2024, 3, 4)
+    ```
+
+    One business day after Friday, March 1 should be Monday, March 4, and adding zero
+    days should return the same date.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/schedule/business.py
+  +++ b/src/schedule/business.py
+  @@ -13,7 +13,7 @@
+           raise ValueError("n must be non-negative")
+       current = day
+       remaining = n
+  -    while remaining > 0:
+  +    while remaining >= 0:
+           current += timedelta(days=1)
+           if is_business_day(current, holidays):
+               remaining -= 1
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_business.py::test_add_business_days_skips_holidays
+  - tests/test_business.py::test_add_five_business_days
+  - tests/test_business.py::test_add_one_business_day_from_friday
+  - tests/test_business.py::test_add_zero_business_days_is_same_day
+pass_to_pass:
+  - tests/test_business.py::test_holiday_is_not_a_business_day
+  - tests/test_business.py::test_negative_days_rejected
+  - tests/test_business.py::test_weekdays_are_business_days
+  - tests/test_business.py::test_weekend_is_not_a_business_day
+  - tests/test_durations.py::test_case_and_whitespace
+  - tests/test_durations.py::test_combined_units
+  - tests/test_durations.py::test_invalid_durations[1h 30m]
+  - tests/test_durations.py::test_invalid_durations[1x]
+  - tests/test_durations.py::test_invalid_durations[5]
+  - tests/test_durations.py::test_invalid_durations[]
+  - tests/test_durations.py::test_invalid_durations[h1]
+  - tests/test_durations.py::test_single_unit
+  - tests/test_durations.py::test_time_until_aware_target
+  - tests/test_durations.py::test_time_until_naive_target
+  - tests/test_durations.py::test_time_until_with_explicit_now
+  - tests/test_parse.py::test_default_order_is_us
+  - tests/test_parse.py::test_european_order
+  - tests/test_parse.py::test_iso_dates_are_unambiguous
+  - tests/test_parse.py::test_unsupported_order_rejected
+  - tests/test_parse.py::test_us_order
+  - tests/test_recur.py::test_monthly_across_year_boundary
+  - tests/test_recur.py::test_monthly_from_month_end
+  - tests/test_recur.py::test_monthly_keeps_day_of_month
+  - tests/test_recur.py::test_monthly_zero_count
+  - tests/test_recur.py::test_next_occurrence
+  - tests/test_recur.py::test_next_occurrence_is_strictly_after
+  - tests/test_recur.py::test_next_occurrence_keeps_timezone

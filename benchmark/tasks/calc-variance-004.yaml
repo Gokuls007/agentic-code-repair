@@ -1,0 +1,66 @@
+id: calc-variance-004
+repo: calc
+bug_type: missing-edge-case
+difficulty: medium
+
+issue:
+  title: 'Sample variance of a single value crashes'
+  body: |
+    The docstring of `variance` says it raises `ValueError` when asked for a sample
+    variance with fewer than two values, but instead I get:
+
+    ```python
+    >>> from calc import variance
+    >>> variance([7], sample=True)
+    ZeroDivisionError: float division by zero
+    ```
+
+    A `ValueError` with a clear message is what the docs promise. The population
+    variance of the same list (`variance([7])`) correctly returns 0.0.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/calc/stats.py
+  +++ b/src/calc/stats.py
+  @@ -29,8 +29,6 @@
+       m = mean(xs)
+       ss = sum((x - m) ** 2 for x in xs)
+       if sample:
+  -        if n < 2:
+  -            raise ValueError("sample variance needs at least two values")
+           return ss / (n - 1)
+       return ss / n
+   
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_stats.py::test_sample_variance_needs_two_values
+pass_to_pass:
+  - tests/test_ops.py::test_add
+  - tests/test_ops.py::test_clamp_above
+  - tests/test_ops.py::test_clamp_at_bounds
+  - tests/test_ops.py::test_clamp_below
+  - tests/test_ops.py::test_clamp_in_range
+  - tests/test_ops.py::test_clamp_invalid_bounds
+  - tests/test_ops.py::test_subtract
+  - tests/test_rounding.py::test_half_up_negative
+  - tests/test_rounding.py::test_half_up_to_integer
+  - tests/test_rounding.py::test_half_up_with_digits
+  - tests/test_rounding.py::test_no_rounding_needed
+  - tests/test_rounding.py::test_returns_int_without_digits
+  - tests/test_stats.py::test_mean_basic
+  - tests/test_stats.py::test_mean_empty_raises
+  - tests/test_stats.py::test_mean_single
+  - tests/test_stats.py::test_median_empty_raises
+  - tests/test_stats.py::test_median_even
+  - tests/test_stats.py::test_median_odd
+  - tests/test_stats.py::test_median_two_values
+  - tests/test_stats.py::test_percentile_bounds
+  - tests/test_stats.py::test_percentile_interpolates
+  - tests/test_stats.py::test_percentile_invalid_p
+  - tests/test_stats.py::test_percentile_median
+  - tests/test_stats.py::test_variance_empty_raises
+  - tests/test_stats.py::test_variance_population
+  - tests/test_stats.py::test_variance_sample
+  - tests/test_stats.py::test_variance_single_value_population

@@ -1,0 +1,66 @@
+id: text-title-005
+repo: textkit
+bug_type: wrong-conditional
+difficulty: easy
+
+issue:
+  title: 'title_case() leaves the first word lowercase'
+  body: |
+    ```python
+    >>> from textkit import title_case
+    >>> title_case("the lord of the rings")
+    'the Lord of the Rings'
+    ```
+
+    I expected `'The Lord of the Rings'`: a title should always start with a capital,
+    even when the first word is a short one like "the". The small words in the middle
+    are handled correctly.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/textkit/case.py
+  +++ b/src/textkit/case.py
+  @@ -9,7 +9,7 @@
+       out = []
+       for i, word in enumerate(words):
+           lower = word.lower()
+  -        if 0 < i < len(words) - 1 and lower in SMALL_WORDS:
+  +        if i < len(words) - 1 and lower in SMALL_WORDS:
+               out.append(lower)
+           else:
+               out.append(lower[:1].upper() + lower[1:])
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_case.py::test_title_case_small_words
+pass_to_pass:
+  - tests/test_case.py::test_title_case_last_word_capitalized
+  - tests/test_case.py::test_title_case_normalizes_mixed_case
+  - tests/test_case.py::test_title_case_single_small_word
+  - tests/test_case.py::test_word_count
+  - tests/test_case.py::test_word_count_empty
+  - tests/test_case.py::test_word_count_mixed_whitespace
+  - tests/test_search.py::test_find_spans_whole_words_only
+  - tests/test_search.py::test_highlight_basic
+  - tests/test_search.py::test_highlight_case_insensitive
+  - tests/test_search.py::test_highlight_no_match
+  - tests/test_search.py::test_index_case_insensitive
+  - tests/test_search.py::test_index_lookup
+  - tests/test_search.py::test_index_unknown_term
+  - tests/test_search.py::test_tokenize_spans
+  - tests/test_slug.py::test_accents_transliterated
+  - tests/test_slug.py::test_basic
+  - tests/test_slug.py::test_custom_separator
+  - tests/test_slug.py::test_leading_and_trailing_punctuation
+  - tests/test_slug.py::test_only_punctuation
+  - tests/test_slug.py::test_punctuation_runs_collapse
+  - tests/test_wrap.py::test_truncate_cuts_with_ellipsis
+  - tests/test_wrap.py::test_truncate_never_exceeds_width
+  - tests/test_wrap.py::test_truncate_short_text_unchanged
+  - tests/test_wrap.py::test_truncate_tiny_width
+  - tests/test_wrap.py::test_wrap_breaks_long_text
+  - tests/test_wrap.py::test_wrap_empty
+  - tests/test_wrap.py::test_wrap_invalid_width
+  - tests/test_wrap.py::test_wrap_keeps_overlong_word
+  - tests/test_wrap.py::test_wrap_line_that_fits_exactly

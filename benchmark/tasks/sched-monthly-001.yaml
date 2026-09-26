@@ -1,0 +1,73 @@
+id: sched-monthly-001
+repo: schedule
+bug_type: api-misuse
+difficulty: medium
+
+issue:
+  title: 'Monthly dates drift off the start day'
+  body: |
+    ```python
+    >>> from datetime import date
+    >>> from schedule.recur import monthly
+    >>> monthly(date(2024, 1, 15), 3)
+    [datetime.date(2024, 1, 15), datetime.date(2024, 2, 14), datetime.date(2024, 3, 15)]
+    >>> monthly(date(2023, 12, 10), 2)
+    [datetime.date(2023, 12, 10), datetime.date(2024, 1, 9)]
+    ```
+
+    I expected the same day of every month: Jan 15, Feb 15, Mar 15, and Dec 10, Jan 10.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/schedule/recur.py
+  +++ b/src/schedule/recur.py
+  @@ -1,10 +1,12 @@
+  +from datetime import timedelta
+  +
+   from dateutil.relativedelta import relativedelta
+   
+   
+   def monthly(start, count):
+       """count dates one calendar month apart, keeping start's day of month where the month
+       allows it (Jan 31 -> Feb 29 -> Mar 31 -> Apr 30)."""
+  -    return [start + relativedelta(months=i) for i in range(count)]
+  +    return [start + timedelta(days=30 * i) for i in range(count)]
+   
+   
+   def next_occurrence(start, after, months=1):
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_recur.py::test_monthly_across_year_boundary
+  - tests/test_recur.py::test_monthly_from_month_end
+  - tests/test_recur.py::test_monthly_keeps_day_of_month
+pass_to_pass:
+  - tests/test_business.py::test_add_business_days_skips_holidays
+  - tests/test_business.py::test_add_five_business_days
+  - tests/test_business.py::test_add_one_business_day_from_friday
+  - tests/test_business.py::test_add_zero_business_days_is_same_day
+  - tests/test_business.py::test_holiday_is_not_a_business_day
+  - tests/test_business.py::test_negative_days_rejected
+  - tests/test_business.py::test_weekdays_are_business_days
+  - tests/test_business.py::test_weekend_is_not_a_business_day
+  - tests/test_durations.py::test_case_and_whitespace
+  - tests/test_durations.py::test_combined_units
+  - tests/test_durations.py::test_invalid_durations[1h 30m]
+  - tests/test_durations.py::test_invalid_durations[1x]
+  - tests/test_durations.py::test_invalid_durations[5]
+  - tests/test_durations.py::test_invalid_durations[]
+  - tests/test_durations.py::test_invalid_durations[h1]
+  - tests/test_durations.py::test_single_unit
+  - tests/test_durations.py::test_time_until_aware_target
+  - tests/test_durations.py::test_time_until_naive_target
+  - tests/test_durations.py::test_time_until_with_explicit_now
+  - tests/test_parse.py::test_default_order_is_us
+  - tests/test_parse.py::test_european_order
+  - tests/test_parse.py::test_iso_dates_are_unambiguous
+  - tests/test_parse.py::test_unsupported_order_rejected
+  - tests/test_parse.py::test_us_order
+  - tests/test_recur.py::test_monthly_zero_count
+  - tests/test_recur.py::test_next_occurrence
+  - tests/test_recur.py::test_next_occurrence_is_strictly_after
+  - tests/test_recur.py::test_next_occurrence_keeps_timezone

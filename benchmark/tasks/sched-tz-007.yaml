@@ -1,0 +1,90 @@
+id: sched-tz-007
+repo: schedule
+bug_type: multi-file
+difficulty: hard
+
+issue:
+  title: 'Timezone-aware scheduling crashes'
+  body: |
+    Combining the recurrence and duration helpers with timezone-aware datetimes fails:
+
+    ```python
+    >>> from datetime import datetime, timedelta, timezone
+    >>> from schedule.recur import next_occurrence
+    >>> from schedule.durations import time_until
+    >>> tz = timezone(timedelta(hours=1))
+    >>> nxt = next_occurrence(datetime(2024, 1, 15, 9, tzinfo=tz), datetime(2024, 2, 1, tzinfo=tz))
+    >>> nxt.tzinfo is None
+    True
+    >>> time_until(nxt)
+    TypeError: can't subtract offset-naive and offset-aware datetimes
+    ```
+
+    The next occurrence should keep the timezone I passed in. And `time_until` also
+    fails on its own for plain naive datetimes, e.g.
+    `time_until(datetime.now() + timedelta(hours=1))` raises the same TypeError
+    instead of returning about an hour.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/schedule/recur.py
+  +++ b/src/schedule/recur.py
+  @@ -14,5 +14,5 @@
+       while True:
+           candidate = start + relativedelta(months=i * months)
+           if candidate > after:
+  -            return candidate
+  +            return candidate.replace(tzinfo=None)
+           i += 1
+  --- a/src/schedule/durations.py
+  +++ b/src/schedule/durations.py
+  @@ -1,5 +1,5 @@
+   import re
+  -from datetime import datetime
+  +from datetime import datetime, timezone
+   
+   _PART = re.compile(r"(\d+)([dhms])")
+   _FORMAT = re.compile(r"(\d+[dhms])+")
+  @@ -18,5 +18,5 @@
+       """Time from now until target. `now` defaults to the current time in target's
+       timezone (or naive local time for a naive target)."""
+       if now is None:
+  -        now = datetime.now(target.tzinfo)
+  +        now = datetime.now(timezone.utc)
+       return target - now
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_durations.py::test_time_until_naive_target
+  - tests/test_recur.py::test_next_occurrence_keeps_timezone
+pass_to_pass:
+  - tests/test_business.py::test_add_business_days_skips_holidays
+  - tests/test_business.py::test_add_five_business_days
+  - tests/test_business.py::test_add_one_business_day_from_friday
+  - tests/test_business.py::test_add_zero_business_days_is_same_day
+  - tests/test_business.py::test_holiday_is_not_a_business_day
+  - tests/test_business.py::test_negative_days_rejected
+  - tests/test_business.py::test_weekdays_are_business_days
+  - tests/test_business.py::test_weekend_is_not_a_business_day
+  - tests/test_durations.py::test_case_and_whitespace
+  - tests/test_durations.py::test_combined_units
+  - tests/test_durations.py::test_invalid_durations[1h 30m]
+  - tests/test_durations.py::test_invalid_durations[1x]
+  - tests/test_durations.py::test_invalid_durations[5]
+  - tests/test_durations.py::test_invalid_durations[]
+  - tests/test_durations.py::test_invalid_durations[h1]
+  - tests/test_durations.py::test_single_unit
+  - tests/test_durations.py::test_time_until_aware_target
+  - tests/test_durations.py::test_time_until_with_explicit_now
+  - tests/test_parse.py::test_default_order_is_us
+  - tests/test_parse.py::test_european_order
+  - tests/test_parse.py::test_iso_dates_are_unambiguous
+  - tests/test_parse.py::test_unsupported_order_rejected
+  - tests/test_parse.py::test_us_order
+  - tests/test_recur.py::test_monthly_across_year_boundary
+  - tests/test_recur.py::test_monthly_from_month_end
+  - tests/test_recur.py::test_monthly_keeps_day_of_month
+  - tests/test_recur.py::test_monthly_zero_count
+  - tests/test_recur.py::test_next_occurrence
+  - tests/test_recur.py::test_next_occurrence_is_strictly_after

@@ -68,6 +68,9 @@ class AgentResult(BaseModel):
     resolved: bool = Field(description="All FAIL_TO_PASS and PASS_TO_PASS tests pass.")
     finish_summary: str | None = None
     error: str | None = None
+    error_status: int | None = Field(
+        default=None, description="HTTP status of the LLM error that stopped the run, if any."
+    )
 
     iterations: int
     test_runs: int
@@ -88,7 +91,15 @@ class AgentResult(BaseModel):
 
     final_tests: FinalTests | None
     modified_test_files: list[str] = Field(
-        default_factory=list, description="Original test files the agent edited (restored)."
+        default_factory=list, description="Original test/config files the agent edited (restored)."
     )
+    removed_files: list[str] = Field(
+        default_factory=list, description="Added files that could affect collection (deleted)."
+    )
+    source_files_changed: list[str] = Field(default_factory=list)
     missing_graded_tests: list[str] = Field(default_factory=list)
+    f2p_passed: int = 0
+    f2p_total: int = 0
+    p2p_passed: int = 0
+    p2p_total: int = 0
     diff: str

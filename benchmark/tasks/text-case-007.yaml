@@ -1,0 +1,84 @@
+id: text-case-007
+repo: textkit
+bug_type: multi-file
+difficulty: hard
+
+issue:
+  title: 'Search is case-sensitive everywhere'
+  body: |
+    Searching is supposed to ignore case, but both the highlighter and the index are
+    case-sensitive:
+
+    ```python
+    >>> from textkit import highlight, Index
+    >>> highlight("Foo bar FOO", "foo")
+    'Foo bar FOO'
+    >>> idx = Index()
+    >>> idx.add("d1", "Foo Bar")
+    >>> idx.lookup("foo"), idx.lookup("FOO")
+    ([], [])
+    ```
+
+    I expected `'[Foo] bar [FOO]'` and `(['d1'], ['d1'])`. All-lowercase text and
+    queries work.
+
+# Plants the bug in an otherwise-correct repo (generated diff; do not hand-edit).
+seed_patch: |
+  --- a/src/textkit/tokens.py
+  +++ b/src/textkit/tokens.py
+  @@ -5,10 +5,10 @@
+   
+   def tokenize(text):
+       """Words in text, case-folded, with their (start, end) character spans."""
+  -    return [(m.group().casefold(), m.start(), m.end()) for m in WORD.finditer(text)]
+  +    return [(m.group(), m.start(), m.end()) for m in WORD.finditer(text)]
+   
+   
+   def find_spans(text, term):
+       """Spans of whole-word, case-insensitive occurrences of term in text."""
+  -    needle = term.casefold()
+  +    needle = term
+       return [(start, end) for word, start, end in tokenize(text) if word == needle]
+  --- a/src/textkit/index.py
+  +++ b/src/textkit/index.py
+  @@ -17,4 +17,4 @@
+               self._postings[word].add(doc_id)
+   
+       def lookup(self, term):
+  -        return sorted(self._postings.get(term.casefold(), set()))
+  +        return sorted(self._postings.get(term, set()))
+
+# Grading only; never shown to the agent. Measured by `repair-agent benchmark validate
+# --fill-tests`; keep these two lists last in the file.
+fail_to_pass:
+  - tests/test_search.py::test_highlight_case_insensitive
+  - tests/test_search.py::test_index_case_insensitive
+pass_to_pass:
+  - tests/test_case.py::test_title_case_last_word_capitalized
+  - tests/test_case.py::test_title_case_normalizes_mixed_case
+  - tests/test_case.py::test_title_case_single_small_word
+  - tests/test_case.py::test_title_case_small_words
+  - tests/test_case.py::test_word_count
+  - tests/test_case.py::test_word_count_empty
+  - tests/test_case.py::test_word_count_mixed_whitespace
+  - tests/test_search.py::test_find_spans_whole_words_only
+  - tests/test_search.py::test_highlight_basic
+  - tests/test_search.py::test_highlight_no_match
+  - tests/test_search.py::test_index_lookup
+  - tests/test_search.py::test_index_unknown_term
+  - tests/test_search.py::test_tokenize_spans
+  - tests/test_slug.py::test_accents_transliterated
+  - tests/test_slug.py::test_basic
+  - tests/test_slug.py::test_custom_separator
+  - tests/test_slug.py::test_leading_and_trailing_punctuation
+  - tests/test_slug.py::test_only_punctuation
+  - tests/test_slug.py::test_punctuation_runs_collapse
+  - tests/test_wrap.py::test_truncate_cuts_with_ellipsis
+  - tests/test_wrap.py::test_truncate_never_exceeds_width
+  - tests/test_wrap.py::test_truncate_short_text_unchanged
+  - tests/test_wrap.py::test_truncate_tiny_width
+  - tests/test_wrap.py::test_wrap_breaks_long_text
+  - tests/test_wrap.py::test_wrap_empty
+  - tests/test_wrap.py::test_wrap_invalid_width
+  - tests/test_wrap.py::test_wrap_keeps_overlong_word
+  - tests/test_wrap.py::test_wrap_line_that_fits_exactly

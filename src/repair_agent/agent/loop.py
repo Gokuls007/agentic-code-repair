@@ -47,6 +47,7 @@ class LoopResult:
     state: AgentState
     messages: list[Message] = field(default_factory=list)
     error: str | None = None
+    error_status: int | None = None
 
 
 class AgentLoop:
@@ -142,7 +143,9 @@ class AgentLoop:
                     EventKind.ERROR,
                     {"source": "llm", "status": exc.status_code, "message": str(exc)},
                 )
-                return LoopResult(reason, state, messages, error=str(exc))
+                return LoopResult(
+                    reason, state, messages, error=str(exc), error_status=exc.status_code
+                )
 
             self._record_response(state, response)
             messages.append(response.message)
@@ -320,6 +323,7 @@ def solve_task(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     rng: Callable[[], float] = random.random,
+    result_path: Path | None = None,
 ) -> AgentResult:
     """Run the agent on ``task`` in ``workspace``, grade it, and write the result record."""
     started_at = datetime.now(UTC)
@@ -379,6 +383,7 @@ def solve_task(
         resolved=bool(graded and graded.resolved),
         finish_summary=state.finish_summary,
         error=error,
+        error_status=result.error_status,
         iterations=state.iteration,
         test_runs=state.test_runs,
         tool_calls=dict(state.tool_calls),
@@ -394,12 +399,18 @@ def solve_task(
         llm_s=round(state.llm_s, 2),
         final_tests=graded.final_tests if graded else None,
         modified_test_files=graded.modified_test_files if graded else [],
+        removed_files=graded.removed_files if graded else [],
+        source_files_changed=graded.source_files_changed if graded else [],
         missing_graded_tests=graded.missing_graded_tests if graded else [],
+        f2p_passed=graded.f2p_passed if graded else 0,
+        f2p_total=graded.f2p_total if graded else len(task.fail_to_pass),
+        p2p_passed=graded.p2p_passed if graded else 0,
+        p2p_total=graded.p2p_total if graded else len(task.pass_to_pass),
         diff=diff,
     )
     tracer.log(EventKind.TASK_END, record.model_dump(mode="json", exclude={"diff"}))
-    result_path = tracer.path.with_name(f"{task.id}.result.json")
-    result_path.write_text(record.model_dump_json(indent=2), encoding="utf-8")
+    out = result_path or tracer.path.with_name(f"{task.id}.result.json")
+    out.write_text(record.model_dump_json(indent=2), encoding="utf-8")
     return record
 
 
