@@ -204,6 +204,11 @@ Attempts lost to infrastructure (quota, outages, Docker) are excluded and re-run
 
 ## Results
 
-One smoke-test run so far: Groq `gpt-oss-120b` resolved `calc-mean-001` for $0.00 on the free
-tier, but didn't finish cleanly. Benchmark numbers go into [RESULTS.md](RESULTS.md), and only
-from real `eval` reports.
+**Baseline model: Groq `openai/gpt-oss-120b`.** Every number in [RESULTS.md](RESULTS.md) comes
+from this model. **Claude Sonnet 5 is untested**: the Anthropic provider is implemented and
+unit-tested, but the account has no API credit, so no real Sonnet 5 run exists. The
+Groq-vs-Anthropic comparison waits for credits (Phase 6).
+
+So far there are two single-run smoke tests on `calc-mean-001`, plus a 6-task pipeline check.
+The full 27 × 3 baseline is next. Benchmark numbers go into RESULTS.md only from real `eval`
+reports.

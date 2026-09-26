@@ -1,7 +1,12 @@
 # Results
 
-Only numbers from actual runs appear here. Each row links to the trace and result JSON it
-came from (`runs/` is gitignored, so those files are local).
+Only numbers from actual runs appear here. Each row names the run id of the trace and result
+JSON it came from (`runs/` is gitignored, so those files are local).
+
+- **Baseline model: Groq `openai/gpt-oss-120b`.** All results below use it.
+- **Claude Sonnet 5: untested.** The Anthropic provider is implemented and unit-tested, but
+  every real request so far was rejected for lack of API credit. No Sonnet 5 numbers exist
+  yet; they will be added only from real runs once credits are available.
 
 ## Smoke tests (single runs, not benchmarks)
 
