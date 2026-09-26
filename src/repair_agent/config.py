@@ -79,6 +79,9 @@ class LLMSettings(BaseModel):
     max_retries: int = Field(default=3, ge=0)
     retry_base_delay_s: float = Field(default=2.0, gt=0)
     retry_max_delay_s: float = Field(default=30.0, gt=0)
+    # A retry that would have to wait longer than this (e.g. a daily-quota 429 with a long
+    # retry-after) gives up instead of sleeping; the eval runner treats that as infrastructure.
+    max_retry_wait_s: float = Field(default=120.0, gt=0)
 
 
 class BudgetSettings(BaseModel):

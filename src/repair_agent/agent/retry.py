@@ -40,11 +40,13 @@ def call_with_retry(
     sleep: Callable[[float], None],
     on_retry: Callable[[int, LLMError, float], None] | None = None,
     rng: Callable[[], float] = random.random,
+    max_wait_s: float | None = None,
 ) -> T:
     """Call ``fn``, retrying retryable :class:`LLMError`s.
 
     Gives up (re-raising the last error) when the error is not retryable, retries are
-    exhausted, or the next wait would run past the wall-clock deadline.
+    exhausted, the next wait would run past the wall-clock deadline, or the next wait is
+    longer than ``max_wait_s`` (a long retry-after means a quota, not a blip).
     """
     attempt = 0
     while True:
@@ -56,7 +58,7 @@ def call_with_retry(
             delay = backoff_delay(
                 attempt, base_s=base_s, cap_s=cap_s, retry_after_s=exc.retry_after_s, rng=rng
             )
-            if delay >= time_left():
+            if delay >= time_left() or (max_wait_s is not None and delay > max_wait_s):
                 raise
             if on_retry:
                 on_retry(attempt + 1, exc, delay)

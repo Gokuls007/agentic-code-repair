@@ -252,6 +252,7 @@ class AgentLoop:
             sleep=self.sleep,
             on_retry=on_retry,
             rng=self.rng,
+            max_wait_s=llm.max_retry_wait_s,
         )
 
     def _record_response(self, state: AgentState, response: LLMResponse) -> None:

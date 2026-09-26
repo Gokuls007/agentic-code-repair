@@ -211,3 +211,36 @@ def test_workspace_restore_and_changed_files(tmp_path: Path) -> None:
         assert test_file.read_bytes() == original
         assert (ws.root / "tests/test_stats.py").exists()
         assert ws.changed_files(["tests/test_ops.py"]) == []
+
+
+def test_call_with_retry_gives_up_on_quota_length_waits() -> None:
+    fn, calls = _flaky(
+        [LLMError("tokens per day", retryable=True, status_code=429, retry_after_s=900)]
+    )
+    waits: list[float] = []
+    with pytest.raises(LLMError, match="tokens per day"):
+        call_with_retry(
+            fn,
+            max_retries=8,
+            base_s=1,
+            cap_s=10,
+            time_left=lambda: 1800,
+            sleep=waits.append,
+            max_wait_s=120,
+        )
+    assert waits == [] and calls["n"] == 1
+    # an ordinary per-minute wait is still honoured
+    fn2, _ = _flaky([LLMError("tpm", retryable=True, status_code=429, retry_after_s=20)])
+    assert (
+        call_with_retry(
+            fn2,
+            max_retries=8,
+            base_s=1,
+            cap_s=10,
+            time_left=lambda: 1800,
+            sleep=waits.append,
+            max_wait_s=120,
+        )
+        == "ok"
+    )
+    assert waits == [20]

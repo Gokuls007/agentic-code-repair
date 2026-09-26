@@ -95,6 +95,7 @@ def config_snapshot(settings: Settings, provider_name: str) -> dict[str, Any]:
         "groq_tpm_limit": llm.groq_tpm_limit if provider_name == "groq" else None,
         "groq_free_tier": llm.groq_free_tier if provider_name == "groq" else None,
         "max_retries": llm.max_retries,
+        "max_retry_wait_s": llm.max_retry_wait_s,
         "request_timeout_s": llm.request_timeout_s,
         "price": price.model_dump() if (price := settings.pricing.get(llm.model)) else None,
         "budget": settings.budget.model_dump(),

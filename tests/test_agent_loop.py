@@ -610,3 +610,15 @@ def test_cost_budget(task, ws) -> None:
     assert len(provider.requests) == 2
     budget_line = provider.requests[1]["messages"][-1].content[-1].text
     assert "cost $0.0030/$0.0050" in budget_line
+
+
+def test_daily_quota_429_stops_as_llm_error_with_status_429(task, ws) -> None:
+    quota = LLMError(
+        "Rate limit reached ... tokens per day (TPD)",
+        retryable=True,
+        status_code=429,
+        retry_after_s=1500,
+    )
+    result, provider, _ = run(task, ws, [reply(tc("list_files")), quota])
+    assert result.stop_reason == StopReason.LLM_ERROR and result.error_status == 429
+    assert len(provider.requests) == 2  # no sleeping through the quota

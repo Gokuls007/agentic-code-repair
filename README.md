@@ -204,8 +204,10 @@ Attempts lost to infrastructure (quota, outages, Docker) are excluded and re-run
 
 ## Results
 
-**Baseline model: Groq `openai/gpt-oss-120b`.** Every number in [RESULTS.md](RESULTS.md) comes
-from this model. **Claude Sonnet 5 is untested**: the Anthropic provider is implemented and
+**Baseline model: Groq `openai/gpt-oss-120b`, free-tier profile.** Every number in
+[RESULTS.md](RESULTS.md) comes from this model. The baseline uses the free-tier profile in
+`.env.example` (8K tokens/min limits, tightened context and tool output), and later experiments
+must use the same profile to be comparable (DECISIONS.md #34). **Claude Sonnet 5 is untested**: the Anthropic provider is implemented and
 unit-tested, but the account has no API credit, so no real Sonnet 5 run exists. The
 Groq-vs-Anthropic comparison waits for credits (Phase 6).
 

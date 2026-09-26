@@ -557,3 +557,43 @@ The report adds the model ids the API actually returned.
 would handicap the agent and make the baseline a measure of truncation. Every
 free-tier-affected run so far was a smoke test, so nothing reported needs to be
 re-labelled.
+## 34. The baseline uses the free-tier profile; later experiments must use the same profile (supersedes #33's baseline choice)
+
+**Decision.**
+- **Profile.** The 27-task baseline runs on Groq's **free tier** with `openai/gpt-oss-120b`,
+  using the free-tier profile in `.env.example`:
+
+  | Group | Settings |
+  |---|---|
+  | Model | `tool_choice=required`, `effort=medium`, `MAX_OUTPUT_TOKENS=4096`, `GROQ_TPM_LIMIT=8000`, `GROQ_FREE_TIER=true`, `MAX_RETRIES=8`, `MAX_RETRY_WAIT_S=120` |
+  | Context | elision at 4,000 tokens, keeping 2 turns |
+  | Tool output | 6,000 chars, 200-line pages, 50 search matches |
+  | Budgets | 30 iterations, 10 test runs, 150K billable tokens, 1,800 s, $0.05 list-price cap |
+
+  The Developer-tier profile from #33 stays documented but is **not** the baseline.
+- **Runs.** One run per task (`--runs 1`), resumed daily. Because of that, pass@3 and
+  across-run variance are not available for the baseline.
+- **Comparability rule.** Every later experiment that claims an improvement over the
+  baseline must use this exact profile, with only the variable under test changed. That
+  covers retrieval and reflection in Phase 6, and model or provider comparisons.
+  - The eval manifest records the full config snapshot, so a mismatch is visible.
+  - `--resume` refuses a changed config, so one eval never mixes profiles.
+  - A profile change (for example the Developer tier) needs its own baseline row.
+- **Daily-limit handling.** A retry that would wait longer than `max_retry_wait_s` (120 s)
+  gives up instead of sleeping.
+  - The free tier's per-minute 429s wait 1–25 s and are unaffected.
+  - The daily-limit 429 has a retry-after of many minutes. It ends the attempt as an LLM
+    error with status 429, which the runner classifies as infrastructure: the attempt is
+    excluded, the eval stops, and that attempt re-runs on resume.
+
+**Why.**
+- The Developer-tier upgrade isn't happening. Running the baseline on the profile that will
+  actually be available keeps it reproducible and cheap ($0).
+- Fixing the profile makes Phase 6 deltas attributable to the change under test, not to
+  different limits.
+- Without the retry-wait cap, a daily-limit wait could consume an attempt's 30-minute
+  budget and be mis-scored as an agent timeout.
+
+**Costs of this choice.** The small context and tool-output limits may lower the resolve
+rate compared with the defaults. That is part of what this baseline measures, and it will be
+stated next to the numbers.
