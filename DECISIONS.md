@@ -259,3 +259,49 @@ at build time:
 - A task can override the image. The repo itself is still loaded via PYTHONPATH.
 - The SWE-bench adapter, if built, would use its published images with the same run-time
   restrictions.
+## 19. Development provider switched to Groq free tier, `openai/gpt-oss-120b` (revised)
+
+**Decision.** The default provider is now Groq with `openai/gpt-oss-120b`, and `.env.example`
+ships a Groq profile. Anthropic remains fully supported: its profile is commented out in
+`.env.example`, and switching back is two lines. This supersedes #8 as the default.
+
+**Why.**
+- **Cost.** There are no Anthropic API credits available right now. Development has to
+  continue, and Groq's free tier costs nothing.
+- **Model choice.** Groq's docs (checked 2026-09-25) list the free-tier models that support
+  tool calling: `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `openai/gpt-oss-safeguard-20b`,
+  and `qwen/qwen3.8-27b`. `gpt-oss-120b` is the largest and a production model (131K
+  context), so it's the strongest fit for code. MiniMax M2.7 and Llama 3.3 70B also support
+  tools, but they aren't on the free-tier table. The model id comes from config
+  (`REPAIR_LLM__MODEL`).
+- **Parallel calls.** gpt-oss can't make parallel tool calls. The loop already handles one
+  call per turn.
+- The Groq-vs-Anthropic comparison stays a Phase 6 experiment.
+
+## 20. Groq free-tier specifics: TPM sizing, error classes, $0.00 cost (Groq provider)
+
+**Decision.**
+- **TPM sizing.** The free tier charges each request its prompt *plus the declared
+  `max_completion_tokens`* against a limit of 8K tokens per minute. A request over it gets
+  413, which backing off can't fix. The provider estimates the prompt size (JSON length ÷
+  3.2) and shrinks `max_completion_tokens` to fit `groq_tpm_limit`. If less than
+  `min_output_tokens` would be left, it raises a non-retryable 413 without sending. The loop
+  then trims old tool results once, down to the most recent turn, and retries.
+- **Error classes.**
+  - 429s are retried, waiting at least the server's `retry-after`.
+  - A 413 that mentions the per-minute window is retried after 20 s; a plain 413 is not.
+  - A 400 `tool_use_failed` or `output_parse_failed` is a bad sample, so it's retried.
+- **No prompt caching.** Nothing cache-related is sent to Groq. Any `cached_tokens` it
+  reports are split out as cache reads, so input + cache + output still equals the billed
+  total and the token budget stays accurate.
+- **Cost.** It's recorded as `cost_usd = 0.0` with a `cost_note`, and `list_price_usd` keeps
+  the on-demand price equivalent ($0.15 / $0.60 per 1M tokens for gpt-oss-120b). A model with
+  no price entry still records `None` with a note.
+- **Groq profile tuning.** Smaller tool outputs (6K chars, 200-line pages), elision at 4K
+  prompt tokens, 8 retries, a 30-minute wall clock, and a 150K per-task token cap (the daily
+  free quota is about 200K).
+
+**Found in the first real run.** The model's final turn failed with 400 `output_parse_failed`.
+Only `tool_use_failed` was treated as retryable at the time, so the loop stopped with
+`llm_error` after the fix was already in and verified. That code is now retried too, with a
+test.

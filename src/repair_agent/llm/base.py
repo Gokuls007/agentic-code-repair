@@ -13,6 +13,10 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
+# Providers that receive tool arguments as a JSON string put unparseable input under this key,
+# so the tool registry can tell the model its JSON was malformed.
+INVALID_JSON_KEY = "_invalid_json"
+
 
 class TextBlock(BaseModel):
     """Plain text produced by the model or the user."""

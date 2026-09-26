@@ -122,6 +122,21 @@ class AgentLoop:
             try:
                 response = self._call_llm(messages, specs)
             except LLMError as exc:
+                if exc.status_code == 413 and not exc.retryable:
+                    # Prompt too large for the provider's per-request limit: trim old tool
+                    # output as far as possible and try again (at most once per cut).
+                    count = elide_old_tool_results(messages, keep_recent_turns=1)
+                    if count:
+                        state.elisions += 1
+                        self.tracer.log(
+                            EventKind.CONTEXT,
+                            {
+                                "action": "emergency_elide",
+                                "tool_results_elided": count,
+                                "reason": str(exc),
+                            },
+                        )
+                        continue
                 reason = StopReason.TIMEOUT if self.time_left() <= 0 else StopReason.LLM_ERROR
                 self.tracer.log(
                     EventKind.ERROR,
@@ -347,7 +362,7 @@ def solve_task(
         tracer.log(EventKind.GRADE, graded.model_dump(mode="json"))
 
     outcome = _outcome(result.stop_reason, graded.final_tests.all_passed if graded else None)
-    cost = estimate_cost(state.usage, settings.llm.model, settings.pricing)
+    cost, list_price, cost_note = _cost(provider.name, state, settings)
     record = AgentResult(
         run_id=run_id,
         task_id=task.id,
@@ -372,6 +387,8 @@ def solve_task(
         cache_read_tokens=state.usage.cache_read_input_tokens,
         cache_write_tokens=state.usage.cache_creation_input_tokens,
         cost_usd=cost,
+        list_price_usd=list_price,
+        cost_note=cost_note,
         wall_s=round(time.perf_counter() - wall_start, 2),
         llm_s=round(state.llm_s, 2),
         final_tests=graded.final_tests if graded else None,
@@ -383,6 +400,21 @@ def solve_task(
     result_path = tracer.path.with_name(f"{task.id}.result.json")
     result_path.write_text(record.model_dump_json(indent=2), encoding="utf-8")
     return record
+
+
+def _cost(
+    provider: str, state: AgentState, settings: Settings
+) -> tuple[float | None, float | None, str | None]:
+    """(charged, list-price equivalent, note). Free-tier usage is $0.00, never None."""
+    list_price = estimate_cost(state.usage, settings.llm.model, settings.pricing)
+    if provider == "groq" and settings.llm.groq_free_tier:
+        note = "Groq free tier: no charge"
+        if list_price is not None:
+            note += f" (list-price equivalent ${list_price:.4f})"
+        return 0.0, list_price, note
+    if list_price is None:
+        return None, None, f"no price entry for {settings.llm.model!r}"
+    return list_price, list_price, None
 
 
 def _outcome(stop: StopReason, all_passed: bool | None) -> Outcome:

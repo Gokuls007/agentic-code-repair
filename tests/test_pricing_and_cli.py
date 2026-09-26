@@ -58,14 +58,14 @@ def test_cli_config_masks_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_cli_ping_without_key_fails_cleanly() -> None:
     result = runner.invoke(app, ["ping"])
     assert result.exit_code == 1
-    assert "ANTHROPIC_API_KEY is not set" in result.output
+    assert "GROQ_API_KEY is not set" in result.output
     assert result.exception is None or isinstance(result.exception, SystemExit)
 
 
 @pytest.mark.parametrize(
     ("status", "expected"),
     [
-        (401, "authentication failed: check ANTHROPIC_API_KEY"),
+        (401, "authentication failed: check GROQ_API_KEY"),
         (404, "model not found"),
         (None, "could not reach the API"),
     ],

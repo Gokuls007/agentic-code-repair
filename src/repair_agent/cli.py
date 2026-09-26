@@ -77,11 +77,11 @@ def show_config() -> None:
     typer.echo(json.dumps(dumped, indent=2))
 
 
-def _describe_llm_error(exc: LLMError, model: str) -> str:
+def _describe_llm_error(exc: LLMError, model: str, provider: str) -> str:
     """One-line, actionable explanation of a failed LLM call."""
     status = exc.status_code
     if status == 401:
-        return "authentication failed: check ANTHROPIC_API_KEY in .env"
+        return f"authentication failed: check {provider.upper()}_API_KEY in .env"
     if status == 403:
         return "permission denied: this API key cannot use the requested resource"
     if status == 404:
@@ -112,15 +112,23 @@ def ping() -> None:
             max_output_tokens=1024,
         )
     except LLMError as exc:
-        typer.echo(f"error: {_describe_llm_error(exc, settings.llm.model)}", err=True)
+        typer.echo(
+            f"error: {_describe_llm_error(exc, settings.llm.model, settings.llm.provider)}",
+            err=True,
+        )
         raise typer.Exit(code=1) from exc
     cost = estimate_cost(response.usage, settings.llm.model, settings.pricing)
+    if settings.llm.provider == "groq" and settings.llm.groq_free_tier:
+        list_price = f"${cost:.6f}" if cost is not None else "n/a"
+        cost_text = f"$0.00 (Groq free tier; list-price equivalent {list_price})"
+    else:
+        cost_text = f"${cost:.6f}" if cost is not None else "n/a"
     typer.echo(
         f"model={response.model} stop={response.stop_reason} reply={response.message.text!r}"
     )
     typer.echo(
         f"tokens in/out={response.usage.input_tokens}/{response.usage.output_tokens} "
-        f"latency={response.latency_s:.2f}s cost=" + (f"${cost:.6f}" if cost is not None else "n/a")
+        f"latency={response.latency_s:.2f}s cost={cost_text}"
     )
 
 
@@ -199,7 +207,7 @@ def _print_result(r: AgentResult, trace_path: Path) -> None:
             f"in {r.tokens_in:,} · out {r.tokens_out:,} · cache read "
             f"{r.cache_read_tokens:,} · cache write {r.cache_write_tokens:,}",
         ),
-        ("cost (est.)", cost),
+        ("cost", cost + (f" ({r.cost_note})" if r.cost_note else "")),
         ("time", f"{r.wall_s:.1f}s wall, {r.llm_s:.1f}s in LLM"),
         ("final tests", tests),
         ("tests edited", ", ".join(r.modified_test_files) or "none"),

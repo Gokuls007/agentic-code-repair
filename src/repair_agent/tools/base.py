@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from repair_agent.llm.base import ToolCall, ToolResult, ToolSpec
+from repair_agent.llm.base import INVALID_JSON_KEY, ToolCall, ToolResult, ToolSpec
 
 
 class ToolError(Exception):
@@ -107,6 +107,9 @@ class ToolRegistry:
         tool = self._tools.get(call.name)
         if tool is None:
             return _error(f"unknown tool {call.name!r}. Available: {', '.join(self.names)}")
+        if INVALID_JSON_KEY in call.arguments:
+            raw = str(call.arguments[INVALID_JSON_KEY])[:200]
+            return _error(f"arguments for {call.name} were not valid JSON: {raw!r}")
         try:
             args = tool.Args.model_validate(call.arguments)
         except ValidationError as exc:

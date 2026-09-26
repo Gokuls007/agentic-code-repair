@@ -5,9 +5,10 @@ the tests inside a Docker sandbox, iterates on failures, and opens a pull reques
 with an evaluation harness that measures how well the agent actually works.
 
 > **Status: Phase 3 of 6 (agent loop).** `repair-agent solve --task <yaml>` runs the full
-> loop: explore, fix, test in the sandbox, then grade with the original tests restored. It is
-> tested with a scripted LLM. The first real run is still pending: the API account had no
-> credit. `eval` comes in Phase 4.
+> loop: explore, fix, test in the sandbox, then grade with the original tests restored.
+> Development runs on **Groq's free tier** (`openai/gpt-oss-120b`); Anthropic is still
+> supported. The first real smoke test resolved its task (see [RESULTS.md](RESULTS.md)).
+> `eval` comes in Phase 4.
 
 ## Setup
 
@@ -16,7 +17,7 @@ Windows), and [ripgrep](https://github.com/BurntSushi/ripgrep) on `PATH`.
 
 ```bash
 uv sync
-cp .env.example .env              # then add ANTHROPIC_API_KEY
+cp .env.example .env              # then add GROQ_API_KEY (or ANTHROPIC_API_KEY)
 uv run repair-agent sandbox build # one-time: builds the sandbox image
 uv run pytest                     # Docker tests are skipped if the daemon is down
 ```
@@ -46,7 +47,7 @@ flowchart LR
     CLI[cli.py solve] --> Loop[agent/loop.py]
     Loop -->|neutral Message / ToolSpec| LLM[llm/base.py]
     LLM --> A[llm/anthropic.py]
-    LLM -.-> G[llm/groq.py]
+    LLM --> G[llm/groq.py]
     Loop --> Reg[tools/ ToolRegistry]
     Reg --> FT[list / read / edit]
     Reg --> S[search_code: ripgrep]
@@ -97,7 +98,7 @@ truncation note.
 | Module | Responsibility | Phase |
 |---|---|---|
 | `config.py` | Pydantic settings: LLM, budgets, tools, sandbox, GitHub allowlist, pricing | 1 ✅ |
-| `llm/` | Provider-agnostic interface; Anthropic provider; cost estimation | 1 ✅ (Groq: 6) |
+| `llm/` | Provider-agnostic interface; Anthropic and Groq providers; cost estimation | 1 ✅ (Groq: 3 ✅) |
 | `tracing.py` | Append-only JSONL trace per task, flushed per event, with secret redaction | 1 ✅ |
 | `sandbox/` | Host workspace (git), Docker sandbox, JUnit parsing | 2 ✅ |
 | `tools/` | Six agent tools + registry (validation, errors, truncation) | 2 ✅ |
@@ -133,7 +134,21 @@ Each attempt writes `runs/<run_id>/<task_id>.jsonl` (the trace) and
 
 Design decisions and the alternatives considered are in [DECISIONS.md](DECISIONS.md).
 
+### Providers
+
+| | Groq (default) | Anthropic |
+|---|---|---|
+| Model | `openai/gpt-oss-120b` | `claude-sonnet-5` |
+| Tool calls | one per turn (gpt-oss has no parallel calls) | parallel |
+| Prompt caching | not sent (Groq may cache automatically; cached tokens are recorded) | explicit markers on the system prompt and history |
+| Limits handled | 8K tokens/min: `max_completion_tokens` sized to fit, 429 `retry-after`, 413, unparseable-output 400s | 429 / 5xx / `retry-after` |
+| Cost recorded | $0.00 on the free tier, plus the list-price equivalent | list price |
+
+Switch providers with `REPAIR_LLM__PROVIDER` and `REPAIR_LLM__MODEL`; both profiles are in
+`.env.example`.
+
 ## Results
 
-No eval runs yet. Numbers will appear in `RESULTS.md` once the benchmark exists (Phase 4),
-and only from real runs.
+One smoke-test run so far: Groq `gpt-oss-120b` resolved `calc-mean-001` in 10 iterations for
+$0.00 on the free tier. It didn't finish cleanly, though; details are in
+[RESULTS.md](RESULTS.md). Benchmark numbers start in Phase 4, and only from real runs.

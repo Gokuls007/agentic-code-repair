@@ -77,7 +77,11 @@ class AgentResult(BaseModel):
     tokens_out: int
     cache_read_tokens: int
     cache_write_tokens: int
-    cost_usd: float | None
+    cost_usd: float | None = Field(description="Amount charged; 0.0 on a free tier.")
+    list_price_usd: float | None = Field(
+        default=None, description="Cost at the provider's list price (None if unknown)."
+    )
+    cost_note: str | None = None
     wall_s: float
     llm_s: float
 

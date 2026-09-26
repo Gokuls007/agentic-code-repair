@@ -33,15 +33,28 @@ DEFAULT_PRICING: dict[str, ModelPrice] = {
     "claude-opus-5-5": ModelPrice(input_per_mtok=4.0, output_per_mtok=20.0),
     "claude-sonnet-5": ModelPrice(input_per_mtok=2.0, output_per_mtok=10.0),
     "claude-haiku-4-5": ModelPrice(input_per_mtok=1.0, output_per_mtok=5.0),
+    # Groq on-demand list prices (console.groq.com/docs/models, checked 2026-09-25). On the
+    # free tier nothing is charged; these give a list-price equivalent for comparisons.
+    "openai/gpt-oss-120b": ModelPrice(input_per_mtok=0.15, output_per_mtok=0.60),
+    "openai/gpt-oss-20b": ModelPrice(input_per_mtok=0.075, output_per_mtok=0.30),
+    "qwen/qwen3.8-27b": ModelPrice(input_per_mtok=0.80, output_per_mtok=4.00),
 }
 
 
 class LLMSettings(BaseModel):
     """Which provider/model to call and per-request generation limits."""
 
-    provider: ProviderName = "anthropic"
-    model: str = "claude-sonnet-5"
+    provider: ProviderName = "groq"
+    # Strongest tool-calling model on Groq's free tier for code (see DECISIONS.md #19).
+    model: str = "openai/gpt-oss-120b"
     max_output_tokens: int = Field(default=16000, gt=0)
+    # Groq free tier: requests are charged prompt + max_tokens against a per-minute token
+    # limit, and a single request over it fails with 413. The Groq provider shrinks
+    # max_completion_tokens to fit. None disables the clamp (paid tiers).
+    groq_tpm_limit: int | None = Field(default=8000, gt=0)
+    min_output_tokens: int = Field(default=1024, gt=0)
+    # Record Groq usage as $0.00 (free tier) while still reporting the list-price equivalent.
+    groq_free_tier: bool = True
     effort: Effort | None = None
     # Not sent when None. Note: current Claude models (e.g. Sonnet 5) reject sampling params.
     temperature: float | None = Field(default=None, ge=0, le=1)

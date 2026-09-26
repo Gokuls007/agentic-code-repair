@@ -10,8 +10,10 @@ from repair_agent.config import DEFAULT_PRICING, Settings
 
 def test_defaults_are_sane() -> None:
     s = Settings()
-    assert s.llm.provider == "anthropic"
-    assert s.llm.model == "claude-sonnet-5"
+    assert s.llm.provider == "groq"
+    assert s.llm.model == "openai/gpt-oss-120b"
+    assert s.llm.groq_free_tier is True
+    assert s.llm.groq_tpm_limit == 8000
     assert s.budget.max_iterations > 0
     assert s.tools.max_output_chars > 0
     assert s.github.repo_allowlist == []

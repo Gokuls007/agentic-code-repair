@@ -13,7 +13,7 @@ from repair_agent.agent import AgentResult, Outcome, StopReason, load_task, solv
 from repair_agent.agent.context import ELIDED_PREFIX
 from repair_agent.agent.prompts import NUDGE_CUT_OFF, NUDGE_NO_TOOL, SYSTEM_PROMPT
 from repair_agent.config import AgentSettings, BudgetSettings, LLMSettings, Settings
-from repair_agent.llm.base import LLMError, TextBlock, ToolResult
+from repair_agent.llm.base import INVALID_JSON_KEY, LLMError, TextBlock, ToolCall, ToolResult
 from repair_agent.llm.base import StopReason as LLMStop
 from repair_agent.sandbox.workspace import Workspace
 from repair_agent.tracing import EventKind, Tracer, read_trace
@@ -372,3 +372,70 @@ def test_result_json_is_valid_json(task, ws) -> None:
     data = json.loads(trace.with_name(f"{task.id}.result.json").read_text(encoding="utf-8"))
     assert data["outcome"] == "finished_tests_pass" and data["resolved"] is True
     assert data["temperature"] is None and data["model_id"] == result.model_id
+
+
+# --- provider-specific paths (Groq) --------------------------------------------------
+
+
+class GroqScripted(ScriptedProvider):
+    name = "groq"
+
+
+def test_groq_free_tier_cost_is_zero_with_list_price_note(task, ws) -> None:
+    settings = make_settings()
+    settings.llm = LLMSettings(provider="groq", model="openai/gpt-oss-120b")
+    provider = GroqScripted(list(FIX_SCRIPT))
+    with Tracer(ws.root.parent / "runs", "run1", task.id) as tracer:
+        result = solve_task(
+            task,
+            ws,
+            provider=provider,
+            sandbox=FakeSandbox(),
+            settings=settings,
+            tracer=tracer,
+            run_id="run1",
+            clock=FakeClock(),
+            sleep=RecordingSleep(),
+        )
+    assert result.cost_usd == 0.0
+    assert result.list_price_usd == pytest.approx(5_000 * 0.15e-6 + 500 * 0.60e-6)
+    assert result.cost_note is not None and result.cost_note.startswith("Groq free tier")
+
+
+def test_unpriced_model_cost_is_none_with_note(task, ws) -> None:
+    settings = make_settings()
+    settings.llm = LLMSettings(provider="anthropic", model="some-unlisted-model")
+    result, _, _ = run(task, ws, list(FIX_SCRIPT), settings=settings)
+    assert result.cost_usd is None and "no price entry" in (result.cost_note or "")
+
+
+def test_prompt_too_large_triggers_emergency_elision_then_continues(task, ws) -> None:
+    script = [
+        reply(tc("read_file", path="src/calc/ops.py")),
+        reply(tc("read_file", path="src/calc/stats.py")),
+        LLMError("prompt too big for TPM", retryable=False, status_code=413),
+        reply(tc("finish", summary="x")),
+    ]
+    result, provider, trace = run(task, ws, script)
+    assert result.stop_reason == StopReason.FINISHED
+    assert result.context_elisions == 1
+    last = provider.requests[-1]["messages"]
+    first_result = next(
+        m for m in last if m.role == "user" and isinstance(m.content[0], ToolResult)
+    )
+    assert first_result.content[0].content.startswith(ELIDED_PREFIX)
+    events = [e for e in read_trace(trace) if e.kind == EventKind.CONTEXT]
+    assert events and events[0].data["action"] == "emergency_elide"
+
+
+def test_413_with_nothing_left_to_elide_stops_with_llm_error(task, ws) -> None:
+    script = [LLMError("prompt too big for TPM", retryable=False, status_code=413)]
+    result, _, _ = run(task, ws, script)
+    assert result.stop_reason == StopReason.LLM_ERROR
+
+
+def test_malformed_tool_json_gets_an_actionable_error(task, ws) -> None:
+    bad = ToolCall(id="bad1", name="read_file", arguments={INVALID_JSON_KEY: '{"path": '})
+    _, provider, _ = run(task, ws, [reply(bad), reply(tc("finish", summary="x"))])
+    out = provider.requests[1]["messages"][-1].content[0]
+    assert out.is_error and "not valid JSON" in out.content
