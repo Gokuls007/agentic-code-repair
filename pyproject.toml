@@ -1,0 +1,41 @@
+[project]
+name = "repair-agent"
+version = "0.1.0"
+description = "Autonomous agent that repairs code from GitHub issues, with a sandboxed test loop and an evaluation harness."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=1.0,<2",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.7",
+    "typer>=0.12",
+]
+
+[project.scripts]
+repair-agent = "repair_agent.cli:app"
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.0",  # the anthropic SDK's HTTP layer; tests build error responses with it
+    "pytest>=8.3",
+    "ruff>=0.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/repair_agent"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

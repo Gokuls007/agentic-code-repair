@@ -1,0 +1,6 @@
+# Keep LF everywhere: files are copied into Linux containers (Docker sandbox),
+# where CRLF breaks shell scripts and shebangs.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary

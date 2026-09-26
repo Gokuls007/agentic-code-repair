@@ -1,0 +1,19 @@
+# Secrets
+.env
+
+# Run outputs (traces, reports)
+runs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Dashboard (Phase 5)
+dashboard/node_modules/
+dashboard/dist/
