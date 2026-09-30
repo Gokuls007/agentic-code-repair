@@ -476,3 +476,15 @@ def test_exhausted_by_rate_limit_still_reports_429() -> None:
     with pytest.raises(LLMError) as info:
         call(pool(Named("a", [quota(retry_after=9)]), clock=FakeClock()))
     assert info.value.status_code == 429
+
+
+def test_404_after_the_backend_has_answered_is_transient() -> None:
+    clock = FakeClock()
+    a = Named("a", [ok(), LLMError("Not Found", retryable=False, status_code=404), ok()])
+    p = pool(a, clock=clock)
+    assert call(p).provider == "a"
+    with pytest.raises(LLMError) as info:
+        call(p)
+    assert info.value.retryable and info.value.status_code == 404
+    clock.now += 6
+    assert call(p).provider == "a"  # back after the short cooldown, not benched for good

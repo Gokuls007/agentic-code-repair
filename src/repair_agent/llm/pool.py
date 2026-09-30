@@ -7,8 +7,10 @@ provider (e.g. gpt-oss-120b on Groq and on Cerebras):
 - ``round_robin`` rotates the first backend tried on every request, spreading
   per-minute limits; ``failover`` always tries backends in configured order.
 - A backend whose quota is exhausted (429 with a long or daily retry, 402), whose key is
-  rejected (401/403), or that does not serve the model (404) is **benched**: skipped
-  until its cooldown ends (for the rest of the process for key/model errors).
+  rejected (401/403), or that does not serve the model (404 before it ever answered) is
+  **benched**: skipped until its cooldown ends (for the rest of the process for key/model
+  errors). A 404 from a backend that has already answered is transient (hosts return it
+  briefly while rescheduling a model).
 - A transient failure (5xx, connection error, short 429) benches the backend briefly
   and the same request goes to the next one immediately.
 - A prompt too large for one backend's per-minute cap (a non-retryable 413) is tried on
@@ -64,6 +66,7 @@ class Backend:
     bench_status: int | None = None
     requests: int = 0
     failures: int = 0
+    successes: int = 0
 
 
 class PoolProvider(LLMProvider):
@@ -164,6 +167,7 @@ class PoolProvider(LLMProvider):
                 )
                 errors.append((backend, exc))
                 continue
+            backend.successes += 1
             response.provider = backend.name
             response.fallbacks = failed
             return response
@@ -175,8 +179,18 @@ class PoolProvider(LLMProvider):
         status = exc.status_code
         if status in (401, 403):
             self._bench(backend, math.inf, f"key rejected ({status})", status)
-        elif status == 404:
+        elif status == 404 and not backend.successes:
+            # Never served this model: a wrong model id or base URL, so stop trying.
             self._bench(backend, math.inf, "model not found on this backend (404)", status)
+        elif status == 404:
+            # It answered for this model before, so the model hasn't gone away. NVIDIA's
+            # free endpoint returns 404 for a few seconds while it reschedules a model.
+            self._bench(
+                backend,
+                exc.retry_after_s or s.pool_transient_cooldown_s,
+                "model briefly unavailable (404)",
+                status,
+            )
         elif status == 402 or (status == 429 and _is_quota(exc, s.max_retry_wait_s)):
             self._bench(
                 backend,
