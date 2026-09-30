@@ -40,3 +40,24 @@ with the no-tool-call nudge, graded-ids-only grading, and the new budgets)
   time (5.6 s).
 - **Earlier attempts.** The two Anthropic attempts before this (2026-09-26) never reached
   the model: the account had no credit (HTTP 400). They aren't results and aren't listed.
+
+## Benchmark runs
+
+| Date | Eval id | Provider / model | Tasks x runs | Valid attempts | Resolve rate (95% CI) | pass@1 | pass@3 | Avg iterations | Tokens in / out per attempt | Cost (list-price equiv.) | Wall p50 / p95 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-30 | `eval-20260930-204419-545d2c` | pool / `nvidia/nemotron-3-super-120b-a12b` | 27 x 1 | 27 | 100.0% (87.5%-100.0%) | 100.0% | n/a | 10.4 | 33,861 / 3,480 | $0.0000 (n/a) | 51s / 106s |
+
+**Notes on the Nemotron row (`eval-20260930-204419-545d2c`).** A *model comparison* against
+the gpt-oss-120b baseline profile (DECISIONS.md #34, #36), not a replacement for it.
+- **One forced difference:** `tool_choice=auto`. NVIDIA's endpoint returns 500, or puts
+  the call in plain text, under `required`.
+- **Strict reading of one task.** The first attempt at `inv-sku-007` outgrew the 8K
+  per-request cap after 28 iterations. It had already fixed the bug (graded resolved) but
+  hadn't called `finish`. Under the rules then, that was classified as infrastructure and
+  re-run, and the re-run passed. The rule was then corrected (DECISIONS.md #36). Under the
+  corrected rule the first attempt stands as `context_limit`: **resolve rate still 27/27,
+  success rate 26/27.**
+- **Ceiling effect.** gpt-oss-120b is 14/14 so far. Both models at or near 100% means these
+  27 tasks no longer separate them. The difference is in effort: Nemotron used about 2.7×
+  the input tokens (33.9K vs 12.3K per attempt) but had a lower wall time (p50 51 s vs
+  116 s), because NVIDIA serves it faster than Groq's free tier serves gpt-oss.

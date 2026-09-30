@@ -685,3 +685,39 @@ list does include it. OpenRouter lists it too, but as a paid model, so it's docu
 `nvidia/nemotron-3-super-120b-a12b`, `z-ai/glm-5.3`) as separate experiments. Cerebras's
 free-tier limits and its support for `tool_choice: "required"` are unverified until a key is
 added; `repair-agent ping` checks them.
+
+## 36. First model comparison: Nemotron 3 Super on NVIDIA; context_limit stop; host quirks
+
+**Decision.**
+- **The run.** `nvidia/nemotron-3-super-120b-a12b` is run on NVIDIA's free API catalog
+  through a one-backend pool, with the #34 profile unchanged. The only exception is
+  `tool_choice=auto`.
+- **Why `auto`.** Live probes on 2026-09-30 found:
+  - `required`: HTTP 500, or the tool call returned as plain text (not a real call);
+  - `auto`: real tool calls.
+
+  Every result records `tool_choice`, so the difference is visible.
+- **New stop reason `context_limit`.** When a prompt still exceeds the per-request cap after
+  emergency elision, the attempt stops as `context_limit`, which counts as `budget_exceeded`.
+  Before this, it ended as `llm_error`/413, which the runner treats as infrastructure: the
+  attempt was excluded and re-run on every resume, so a task that reliably outgrows the
+  profile could never be scored. This applies to every provider, the baseline included.
+- **Host quirks handled in the pool** (each with tests):
+  - Tool names wrapped in parser syntax (`<function=read_file`) are unwrapped, only when the
+    result is exactly an offered tool.
+  - A 404 from a backend is treated as transient unless it repeats 5 times before the
+    backend has ever answered. NVIDIA briefly 404s while rescheduling a model.
+  - An all-benched pool reports the real server status (500/503), not a blanket 429.
+  - The transient cooldown is now 5 s instead of 30 s, so a blip costs seconds.
+
+**Result.** 27/27 resolved (95% CI 87.5–100%), 10.4 iterations and 33.9K input tokens per
+attempt on average, p50 wall time 51 s, $0.00.
+- **Disclosed:** one attempt (`inv-sku-007`) was re-run under the old infrastructure rule
+  before `context_limit` existed. It had been graded resolved, so the strict figures are
+  resolve 27/27 and success 26/27 (RESULTS.md).
+
+**Limits.**
+- **One run per task,** so there is no pass@3 or variance.
+- **Ceiling effect.** Both models are at or near 100% on these 27 tasks, so the benchmark no
+  longer separates them. The next step to make comparisons meaningful is harder tasks: more
+  multi-file bugs, larger repos, and issues that need exploration.
