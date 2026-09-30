@@ -111,8 +111,8 @@ def test_per_minute_429_benches_briefly_then_backend_returns() -> None:
     assert call(p).provider == "a"
 
 
-@pytest.mark.parametrize("status", [401, 403, 404])
-def test_bad_key_or_missing_model_benches_for_good(status) -> None:
+@pytest.mark.parametrize("status", [401, 403])
+def test_bad_key_benches_for_good(status) -> None:
     clock = FakeClock()
     a = Named("a", [LLMError("nope", retryable=False, status_code=status)])
     b = Named("b", [ok()], repeat_last=True)
@@ -122,6 +122,30 @@ def test_bad_key_or_missing_model_benches_for_good(status) -> None:
     call(p)
     assert len(a.requests) == 1
     assert math.isinf({s["name"]: s for s in p.status()}["a"]["benched_for_s"])
+
+
+def test_persistent_404_on_a_backend_that_never_answered_benches_for_good() -> None:
+    clock = FakeClock()
+    not_found = LLMError("Not Found", retryable=False, status_code=404)
+    a = Named("a", [not_found], repeat_last=True)
+    b = Named("b", [ok()], repeat_last=True)
+    p = pool(a, b, clock=clock)
+    for _ in range(5):  # each 404 is a short bench until the fifth in a row
+        call(p)
+        clock.now += 6
+    assert len(a.requests) == 5
+    assert math.isinf({s["name"]: s for s in p.status()}["a"]["benched_for_s"])
+
+
+def test_a_single_404_on_first_contact_is_retried() -> None:
+    clock = FakeClock()
+    a = Named("a", [LLMError("Not Found", retryable=False, status_code=404), ok()])
+    p = pool(a, clock=clock)
+    with pytest.raises(LLMError) as info:
+        call(p)
+    assert info.value.retryable  # the retry layer waits and tries again
+    clock.now += 6
+    assert call(p).provider == "a"
 
 
 def test_server_error_fails_over_immediately() -> None:
