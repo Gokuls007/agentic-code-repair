@@ -436,3 +436,43 @@ def test_attempt_survives_mid_run_quota_and_records_backends(task, ws) -> None:
     stats = backend_stats([result])
     assert stats["nvidia"].request_share == pytest.approx(0.75)
     assert stats["groq"].sole_attempts == 0 and stats["nvidia"].sole_attempts == 0
+
+
+# --- fixes found in the first live Nemotron run ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["<function=read_file", "<function=read_file>", "functions.read_file", "read_file</function>"],
+)
+def test_wrapped_tool_names_are_unwrapped_when_they_match_a_tool(raw) -> None:
+    from repair_agent.llm.base import ToolCall
+    from repair_agent.llm.groq import _unwrap_tool_names
+
+    msg = Message(role="assistant", content=[ToolCall(id="1", name=raw, arguments={})])
+    _unwrap_tool_names(msg, {"read_file", "finish"})
+    assert msg.tool_calls[0].name == "read_file"
+
+
+@pytest.mark.parametrize("raw", ["<function=delete_repo", "read_files", "run shell"])
+def test_unknown_tool_names_are_left_for_the_registry_to_reject(raw) -> None:
+    from repair_agent.llm.base import ToolCall
+    from repair_agent.llm.groq import _unwrap_tool_names
+
+    msg = Message(role="assistant", content=[ToolCall(id="1", name=raw, arguments={})])
+    _unwrap_tool_names(msg, {"read_file", "finish"})
+    assert msg.tool_calls[0].name == raw
+
+
+def test_lone_backend_server_errors_report_their_real_status() -> None:
+    a = Named("a", [LLMError("Internal server error", retryable=True, status_code=500)])
+    with pytest.raises(LLMError) as info:
+        call(pool(a, clock=FakeClock()))
+    assert info.value.status_code == 500 and info.value.retryable  # not a fake 429
+    assert info.value.retry_after_s == pytest.approx(5.0)  # short transient cooldown
+
+
+def test_exhausted_by_rate_limit_still_reports_429() -> None:
+    with pytest.raises(LLMError) as info:
+        call(pool(Named("a", [quota(retry_after=9)]), clock=FakeClock()))
+    assert info.value.status_code == 429

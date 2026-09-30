@@ -156,8 +156,9 @@ class LLMSettings(BaseModel):
     pool_strategy: PoolStrategy = "round_robin"
     # How long a backend that hit its quota stays benched when it gives no retry-after.
     pool_quota_cooldown_s: float = Field(default=3600.0, gt=0)
-    # How long a backend that failed transiently (5xx, connection, short 429) is skipped.
-    pool_transient_cooldown_s: float = Field(default=30.0, gt=0)
+    # How long a backend that failed transiently (5xx, connection, short 429) is skipped when
+    # the server gives no retry-after. Short: one blip on a lone backend should cost seconds.
+    pool_transient_cooldown_s: float = Field(default=5.0, gt=0)
 
     @field_validator("pool")
     @classmethod

@@ -60,6 +60,8 @@ class Backend:
     free_tier: bool = True
     benched_until: float = 0.0
     bench_reason: str | None = None
+    # HTTP status that caused the bench (None = connection error); only 429/402 is a quota.
+    bench_status: int | None = None
     requests: int = 0
     failures: int = 0
 
@@ -117,10 +119,11 @@ class PoolProvider(LLMProvider):
                 start = 0
         return self.backends[start:] + self.backends[:start]
 
-    def _bench(self, backend: Backend, seconds: float, reason: str) -> None:
+    def _bench(self, backend: Backend, seconds: float, reason: str, status: int | None) -> None:
         with self._lock:
             backend.benched_until = max(backend.benched_until, self._clock() + seconds)
             backend.bench_reason = reason
+            backend.bench_status = status
 
     def complete(
         self,
@@ -171,14 +174,15 @@ class PoolProvider(LLMProvider):
         s = self._settings
         status = exc.status_code
         if status in (401, 403):
-            self._bench(backend, math.inf, f"key rejected ({status})")
+            self._bench(backend, math.inf, f"key rejected ({status})", status)
         elif status == 404:
-            self._bench(backend, math.inf, "model not found on this backend (404)")
+            self._bench(backend, math.inf, "model not found on this backend (404)", status)
         elif status == 402 or (status == 429 and _is_quota(exc, s.max_retry_wait_s)):
             self._bench(
                 backend,
                 exc.retry_after_s or s.pool_quota_cooldown_s,
                 f"quota exhausted ({status})",
+                status,
             )
         elif status == 413 and not exc.retryable:
             pass  # too big for this backend's cap; another backend may take it
@@ -187,16 +191,25 @@ class PoolProvider(LLMProvider):
                 backend,
                 exc.retry_after_s or s.pool_transient_cooldown_s,
                 f"transient failure ({status or 'connection'})",
+                status,
             )
 
     def _exhausted_error(self) -> LLMError:
         now = self._clock()
         wait = min(b.benched_until for b in self.backends) - now
         reasons = "; ".join(f"{b.name}: {b.bench_reason}" for b in self.backends)
+        # Report what actually happened: 429 only if some backend is out of quota or rate
+        # limited, otherwise the servers' own status (e.g. 500/503), so traces stay truthful.
+        statuses = [b.bench_status for b in self.backends]
+        status = (
+            429
+            if any(s in (402, 429) for s in statuses)
+            else next((s for s in statuses if s is not None), 503)
+        )
         return LLMError(
             f"every backend in the pool is unavailable ({reasons})",
             retryable=not math.isinf(wait),
-            status_code=429,
+            status_code=status,
             retry_after_s=None if math.isinf(wait) else max(0.0, wait),
             kind=POOL_EXHAUSTED,
         )

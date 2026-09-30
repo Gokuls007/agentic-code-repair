@@ -15,6 +15,7 @@ Differences from the Anthropic provider that matter to the agent:
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
@@ -57,6 +58,11 @@ _REASONING_EFFORT = {
 _CHARS_PER_TOKEN = 3.2
 # A 413 caused by the shared per-minute window clears once the window rolls over.
 _TPM_WINDOW_RETRY_S = 20.0
+# Some hosts' tool-call parsers leak template syntax into the name, e.g. "<function=read_file"
+# (seen on NVIDIA's Nemotron endpoint) or "functions.read_file".
+_WRAPPED_TOOL_NAME = re.compile(
+    r"^\s*(?:<function=|functions\.)?([A-Za-z0-9_]+)(?:>|</function>)?\s*$"
+)
 
 
 class GroqProvider(LLMProvider):
@@ -162,8 +168,10 @@ class GroqProvider(LLMProvider):
         latency = time.perf_counter() - started
 
         choice = response.choices[0]
+        message = self._from_wire(choice.message)
+        _unwrap_tool_names(message, {t.name for t in tools})
         return LLMResponse(
-            message=self._from_wire(choice.message),
+            message=message,
             stop_reason=_STOP_REASONS.get(choice.finish_reason or "", StopReason.OTHER),
             usage=_usage(response.usage),
             model=response.model,
@@ -214,6 +222,18 @@ class GroqProvider(LLMProvider):
                 ToolCall(id=call.id, name=call.function.name, arguments=_parse_args(call))
             )
         return Message(role="assistant", content=blocks, provider=self.name)
+
+
+def _unwrap_tool_names(message: Message, known: set[str]) -> None:
+    """Repair tool names a host's parser wrapped in template syntax, but only when the
+    unwrapped name is exactly one of the offered tools; anything else is left as-is, so a
+    genuinely wrong tool name still reaches the registry and is reported to the model."""
+    for call in message.tool_calls:
+        if call.name in known:
+            continue
+        match = _WRAPPED_TOOL_NAME.match(call.name)
+        if match and match.group(1) in known:
+            call.name = match.group(1)
 
 
 def _tool(spec: ToolSpec) -> dict[str, Any]:
