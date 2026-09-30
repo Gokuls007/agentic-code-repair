@@ -199,7 +199,7 @@ def test_failover_passes_the_remaining_time_budget() -> None:
 
 
 def settings_with(tmp_path: Path, monkeypatch, **env: str) -> Settings:
-    for name in ("GROQ_API_KEY", "NVIDIA_API_KEY"):
+    for name in ("GROQ_API_KEY", "NVIDIA_API_KEY", "CEREBRAS_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
@@ -207,22 +207,26 @@ def settings_with(tmp_path: Path, monkeypatch, **env: str) -> Settings:
     return Settings(_env_file=None, llm=LLMSettings(provider="pool"))
 
 
-def test_default_pool_is_groq_then_nvidia_for_gpt_oss() -> None:
-    names = [(b.name, b.kind, b.base_url) for b in default_pool()]
-    assert names == [
+def test_default_pool_is_groq_then_cerebras_for_gpt_oss() -> None:
+    pool_ = default_pool()
+    assert [(b.name, b.kind, b.base_url) for b in pool_] == [
         ("groq", "groq", None),
-        ("nvidia", "openai_compatible", "https://integrate.api.nvidia.com/v1"),
+        ("cerebras", "openai_compatible", "https://api.cerebras.ai/v1"),
     ]
-    assert LLMSettings().model == "openai/gpt-oss-120b"
+    model = LLMSettings().model
+    assert model == "openai/gpt-oss-120b"
+    # Cerebras names the same model without the org prefix.
+    assert [b.model_for(model) for b in pool_] == ["openai/gpt-oss-120b", "gpt-oss-120b"]
+    assert all(b.tpm_limit == 8000 for b in pool_)  # same request shaping everywhere
 
 
 def test_pool_uses_only_backends_with_keys(tmp_path, monkeypatch) -> None:
-    s = settings_with(tmp_path, monkeypatch, NVIDIA_API_KEY="nv-key-123")
+    s = settings_with(tmp_path, monkeypatch, CEREBRAS_API_KEY="csk-key-123")
     usable, skipped = pool_backends_available(s)
-    assert [b.name for b in usable] == ["nvidia"]
+    assert [b.name for b in usable] == ["cerebras"]
     assert skipped == ["groq (GROQ_API_KEY not set)"]
     provider = create_pool(s)
-    assert [b.name for b in provider.backends] == ["nvidia"]
+    assert [b.name for b in provider.backends] == ["cerebras"]
     assert isinstance(provider.backends[0].provider, OpenAICompatibleProvider)
 
 
@@ -237,7 +241,18 @@ def test_backend_keys_are_redacted_and_read_from_dotenv(tmp_path, monkeypatch) -
     (tmp_path / ".env").write_text("NVIDIA_API_KEY=nv-from-dotenv\n", encoding="utf-8")
     s = Settings(llm=LLMSettings(provider="pool"))
     assert s.env_secret("NVIDIA_API_KEY") == "nv-from-dotenv"
+    # Not a default pool backend any more, but a known provider key: still redacted.
     assert "nv-from-dotenv" in s.secret_values()
+
+
+def test_pool_backend_key_with_custom_env_name_is_redacted(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MY_LOCAL_VLLM_KEY", "local-secret-9")
+    backend = BackendSettings(
+        name="local", base_url="http://localhost:8000/v1", api_key_env="MY_LOCAL_VLLM_KEY"
+    )
+    s = Settings(_env_file=None, llm=LLMSettings(provider="pool", pool=[backend]))
+    assert "local-secret-9" in s.secret_values()
 
 
 def test_pool_from_env_json(monkeypatch, tmp_path) -> None:
@@ -291,10 +306,11 @@ def test_backend_gets_its_own_model_tpm_and_tool_choice(tmp_path, monkeypatch) -
 
 
 def test_manifest_snapshot_records_pool_members_only_for_pools(tmp_path, monkeypatch) -> None:
-    s = settings_with(tmp_path, monkeypatch, NVIDIA_API_KEY="k")
-    snap = config_snapshot(s, "pool", backends=["nvidia"])
+    s = settings_with(tmp_path, monkeypatch, CEREBRAS_API_KEY="k")
+    snap = config_snapshot(s, "pool", backends=["cerebras"])
     assert snap["tool_choice"] == "required"
-    assert [b["name"] for b in snap["pool"]["backends"]] == ["nvidia"]
+    assert [b["name"] for b in snap["pool"]["backends"]] == ["cerebras"]
+    assert snap["pool"]["backends"][0]["model"] == "gpt-oss-120b"
     assert snap["pool"]["strategy"] == "round_robin"
     assert "pool" not in config_snapshot(s, "groq")  # old evals still resume
 

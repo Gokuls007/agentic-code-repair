@@ -602,7 +602,7 @@ stated next to the numbers.
 **Decision.**
 - **What it is.** `REPAIR_LLM__PROVIDER=pool` puts several endpoints serving the **same
   model** behind one provider. The default pool is `openai/gpt-oss-120b` on Groq's free tier,
-  then on NVIDIA's free API catalog (`integrate.api.nvidia.com/v1`, OpenAI-compatible).
+  then on Cerebras (`api.cerebras.ai/v1`, OpenAI-compatible; see the correction below).
   More backends (OpenRouter, Cerebras, a local vLLM) are one JSON entry each in
   `REPAIR_LLM__POOL`, with their key named by `api_key_env`.
 - **Routing.** `round_robin` (default) rotates the first backend on every request to spread
@@ -674,3 +674,14 @@ what the agent sees: model, sampling, limits. A pool changes none of that.
   complete personal-assistant agent, so using it would replace the loop, sandbox and grading
   this project measures. A Hermes *model* on an OpenAI-compatible host could still be a pool
   backend or a comparison model.
+
+**Correction (same day).** The default second backend was NVIDIA's API catalog, based on a
+web article. Checking NVIDIA's live model list (`GET integrate.api.nvidia.com/v1/models`, 81
+models) showed it serves `openai/gpt-oss-20b` but **not** `gpt-oss-120b`, so that backend
+would only ever have returned 404 and been benched. The default is now **Cerebras**
+(`api.cerebras.ai/v1`, model id `gpt-oss-120b`, key `CEREBRAS_API_KEY`), whose public model
+list does include it. OpenRouter lists it too, but as a paid model, so it's documented with
+`free_tier: false`. NVIDIA stays documented for running *other* models there (e.g.
+`nvidia/nemotron-3-super-120b-a12b`, `z-ai/glm-5.3`) as separate experiments. Cerebras's
+free-tier limits and its support for `tool_choice: "required"` are unverified until a key is
+added; `repair-agent ping` checks them.

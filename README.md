@@ -41,7 +41,7 @@ All settings come from environment variables or `.env` (see `.env.example`). Non
 settings use the `REPAIR_` prefix with `__` for nesting, e.g. `REPAIR_LLM__MODEL`,
 `REPAIR_SANDBOX__MEMORY_MB`. Secrets use their standard names (`ANTHROPIC_API_KEY`,
 `GROQ_API_KEY`, `GITHUB_TOKEN`, and each pool backend's `api_key_env` such as
-`NVIDIA_API_KEY`), are held as `SecretStr`, and are scrubbed from traces.
+`CEREBRAS_API_KEY`), are held as `SecretStr`, and are scrubbed from traces.
 
 ## Architecture
 
@@ -53,7 +53,7 @@ flowchart LR
     LLM --> G[llm/groq.py]
     LLM --> P[llm/pool.py: balance across backends]
     P --> G
-    P --> O[llm/openai_compat.py: NVIDIA, OpenRouter, vLLM]
+    P --> O[llm/openai_compat.py: Cerebras, NVIDIA, OpenRouter, vLLM]
     Loop --> Reg[tools/ ToolRegistry]
     Reg --> FT[list / read / edit]
     Reg --> S[search_code: ripgrep]
@@ -175,12 +175,13 @@ Switch providers with `REPAIR_LLM__PROVIDER` and `REPAIR_LLM__MODEL`; both profi
 
 A single free tier covers only 6–10 eval attempts a day. `REPAIR_LLM__PROVIDER=pool` balances
 requests across several endpoints that serve **the same model**. By default that is
-`openai/gpt-oss-120b` on Groq, then on [NVIDIA's free API catalog](https://build.nvidia.com)
-(OpenAI-compatible).
+`openai/gpt-oss-120b` on Groq, then on [Cerebras](https://cloud.cerebras.ai) (OpenAI-compatible,
+model id `gpt-oss-120b`). NVIDIA's free catalog does not serve gpt-oss-120b (only 20b), so it
+is not in the default pool.
 
 ```bash
-# .env: add a free key from build.nvidia.com next to GROQ_API_KEY
-NVIDIA_API_KEY=...
+# .env: add a key from cloud.cerebras.ai next to GROQ_API_KEY
+CEREBRAS_API_KEY=...
 REPAIR_LLM__PROVIDER=pool
 
 uv run repair-agent ping    # checks every backend separately, with a tool call
@@ -211,8 +212,15 @@ uv run repair-agent eval --runs 1
   the environment or `.env` and scrubbed from traces:
   ```bash
   REPAIR_LLM__POOL='[{"name":"groq","kind":"groq","api_key_env":"GROQ_API_KEY","tpm_limit":8000},
-    {"name":"nvidia","base_url":"https://integrate.api.nvidia.com/v1","api_key_env":"NVIDIA_API_KEY","tpm_limit":8000},
-    {"name":"openrouter","base_url":"https://openrouter.ai/api/v1","model":"openai/gpt-oss-120b:free","api_key_env":"OPENROUTER_API_KEY","tpm_limit":8000}]'
+    {"name":"cerebras","base_url":"https://api.cerebras.ai/v1","model":"gpt-oss-120b","api_key_env":"CEREBRAS_API_KEY","tpm_limit":8000},
+    {"name":"openrouter","base_url":"https://openrouter.ai/api/v1","api_key_env":"OPENROUTER_API_KEY","tpm_limit":8000,"free_tier":false}]'
+  ```
+  OpenRouter serves gpt-oss-120b as a paid model (a few cents per million tokens), so it is
+  marked `free_tier: false` and its cost is charged in results.
+  ```bash
+  # To run a *different* model on NVIDIA's free catalog as its own experiment (not the baseline):
+  REPAIR_LLM__MODEL=nvidia/nemotron-3-super-120b-a12b
+  REPAIR_LLM__POOL='[{"name":"nvidia","base_url":"https://integrate.api.nvidia.com/v1","api_key_env":"NVIDIA_API_KEY","tpm_limit":8000}]'
   ```
 
 A pool eval is a separate eval (its manifest lists the backends), not a resume of a

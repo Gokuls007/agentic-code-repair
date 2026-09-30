@@ -3,7 +3,7 @@
 Non-secret settings use the ``REPAIR_`` prefix with ``__`` as the nesting delimiter,
 e.g. ``REPAIR_LLM__MODEL`` or ``REPAIR_BUDGET__MAX_ITERATIONS``. Secrets use their
 conventional unprefixed names (``ANTHROPIC_API_KEY``, ``GROQ_API_KEY``, ``GITHUB_TOKEN``,
-and the ``api_key_env`` of each pool backend, e.g. ``NVIDIA_API_KEY``) and are stored as
+and the ``api_key_env`` of each pool backend, e.g. ``CEREBRAS_API_KEY``) and are stored as
 ``SecretStr`` so they never appear in reprs, logs, or dumps.
 """
 
@@ -30,6 +30,12 @@ DEFAULT_TOOL_CHOICE: dict[str, ToolChoice] = {
     "pool": "required",
 }
 
+CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
+# Provider keys redacted from traces whenever they are set, even if no backend uses them.
+EXTRA_SECRET_ENV = ("CEREBRAS_API_KEY", "NVIDIA_API_KEY", "OPENROUTER_API_KEY")
+# NVIDIA's API catalog (build.nvidia.com) does not serve gpt-oss-120b (checked 2026-09-30:
+# only gpt-oss-20b), so it is not in the default pool; it suits other models, e.g.
+# nvidia/nemotron-3-super-120b-a12b or z-ai/glm-5.3, as their own experiments.
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 
 
@@ -60,19 +66,21 @@ class BackendSettings(BaseModel):
 
 
 def default_pool() -> list[BackendSettings]:
-    """gpt-oss-120b on Groq's free tier, then NVIDIA's free API catalog (build.nvidia.com).
+    """gpt-oss-120b on Groq's free tier, then on Cerebras (cloud.cerebras.ai), whose
+    OpenAI-compatible API serves the same model under the id ``gpt-oss-120b``.
 
-    NVIDIA has no tokens-per-minute cap like Groq's, but it gets the same 8,000 clamp so
-    every request is shaped identically whichever backend serves it: the pool then runs
-    the free-tier baseline profile (DECISIONS.md #34, #35), not a variant of it.
+    Cerebras gets the same 8,000-token clamp as Groq so every request is shaped identically
+    whichever backend serves it: the pool then runs the free-tier baseline profile
+    (DECISIONS.md #34, #35), not a variant of it.
     """
     return [
         BackendSettings(name="groq", kind="groq", api_key_env="GROQ_API_KEY", tpm_limit=8000),
         BackendSettings(
-            name="nvidia",
+            name="cerebras",
             kind="openai_compatible",
-            base_url=NVIDIA_BASE_URL,
-            api_key_env="NVIDIA_API_KEY",
+            base_url=CEREBRAS_BASE_URL,
+            model="gpt-oss-120b",
+            api_key_env="CEREBRAS_API_KEY",
             tpm_limit=8000,
         ),
     ]
@@ -143,7 +151,7 @@ class LLMSettings(BaseModel):
     # from the first available backend; "round_robin" rotates the starting backend on every
     # request to spread per-minute limits. A backend that reports its quota is exhausted
     # (or rejects the key) is benched and the next one answers. Set as JSON, e.g.
-    # REPAIR_LLM__POOL='[{"name":"nvidia","base_url":"...","api_key_env":"NVIDIA_API_KEY"}]'.
+    # REPAIR_LLM__POOL='[{"name":"cerebras","base_url":"...","api_key_env":"CEREBRAS_API_KEY"}]'.
     pool: list[BackendSettings] = Field(default_factory=default_pool)
     pool_strategy: PoolStrategy = "round_robin"
     # How long a backend that hit its quota stays benched when it gives no retry-after.
@@ -260,8 +268,10 @@ class Settings(BaseSettings):
         """All configured secret values, for redaction in logs and traces."""
         secrets = (self.anthropic_api_key, self.groq_api_key, self.github_token)
         values = [s.get_secret_value() for s in secrets if s and s.get_secret_value()]
-        for backend in self.llm.pool:
-            key = self.env_secret(backend.api_key_env)
+        # Pool backends' keys, plus well-known provider keys that may sit in .env unused.
+        names = [b.api_key_env for b in self.llm.pool] + list(EXTRA_SECRET_ENV)
+        for name in names:
+            key = self.env_secret(name)
             if key and key not in values:
                 values.append(key)
         return values

@@ -1,4 +1,4 @@
-"""Any OpenAI-compatible chat-completions endpoint (NVIDIA API catalog, OpenRouter, vLLM, ...).
+"""Any OpenAI-compatible chat-completions endpoint (Cerebras, NVIDIA, OpenRouter, vLLM, ...).
 
 Same wire format and error handling as :class:`GroqProvider`; only the client differs.
 Groq-specific 400 codes (``tool_use_failed``) simply never occur on other hosts, and a

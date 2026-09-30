@@ -2,7 +2,7 @@
 
 Free tiers cap tokens per minute and per day, so one key finishes only a handful of
 eval attempts a day. A pool puts several endpoints for the *same* model behind one
-provider (e.g. gpt-oss-120b on Groq and on NVIDIA's API catalog):
+provider (e.g. gpt-oss-120b on Groq and on Cerebras):
 
 - ``round_robin`` rotates the first backend tried on every request, spreading
   per-minute limits; ``failover`` always tries backends in configured order.
