@@ -60,17 +60,37 @@ _TPM_WINDOW_RETRY_S = 20.0
 
 
 class GroqProvider(LLMProvider):
-    """Calls Groq via the official ``groq`` SDK."""
+    """Calls Groq via the official ``groq`` SDK.
+
+    The wire format is OpenAI chat completions, so :class:`OpenAICompatibleProvider`
+    reuses everything here and only swaps the client and its exception types.
+    """
 
     name = "groq"
+    _status_error: type[Exception] = groq.APIStatusError
+    _connection_error: type[Exception] = groq.APIConnectionError  # includes timeouts
+    _tpm_setting = "REPAIR_LLM__GROQ_TPM_LIMIT"
 
-    def __init__(self, settings: LLMSettings, api_key: str, client: Any | None = None):
-        """Create the provider. ``client`` may be injected for testing."""
+    def __init__(
+        self,
+        settings: LLMSettings,
+        api_key: str,
+        client: Any | None = None,
+        *,
+        name: str | None = None,
+        send_reasoning_effort: bool = True,
+    ):
+        """Create the provider. ``client`` may be injected for testing; ``name`` labels
+        this backend in traces and results (it is "groq" unless running inside a pool)."""
         self._settings = settings
+        if name:
+            self.name = name
+        self._send_reasoning_effort = send_reasoning_effort
         # SDK retries off: the agent's retry layer handles backoff and traces attempts.
-        self._client = client or groq.Groq(
-            api_key=api_key, timeout=settings.request_timeout_s, max_retries=0
-        )
+        self._client = client or self._make_client(settings, api_key)
+
+    def _make_client(self, settings: LLMSettings, api_key: str) -> Any:
+        return groq.Groq(api_key=api_key, timeout=settings.request_timeout_s, max_retries=0)
 
     def build_params(
         self,
@@ -92,7 +112,7 @@ class GroqProvider(LLMProvider):
             params["tool_choice"] = s.tool_choice_for(self.name)
         if s.temperature is not None:
             params["temperature"] = s.temperature
-        if s.effort and s.model.startswith("openai/gpt-oss"):
+        if s.effort and self._send_reasoning_effort and "gpt-oss" in s.model:
             params["reasoning_effort"] = _REASONING_EFFORT[s.effort]
         params["max_completion_tokens"] = self._completion_budget(
             params, max_output_tokens or s.max_output_tokens
@@ -110,7 +130,7 @@ class GroqProvider(LLMProvider):
             raise LLMError(
                 f"prompt is ~{prompt_estimate:,} tokens, leaving under "
                 f"{self._settings.min_output_tokens:,} for the reply within the "
-                f"{limit:,} tokens/minute limit (REPAIR_LLM__GROQ_TPM_LIMIT)",
+                f"{limit:,} tokens/minute limit ({self._tpm_setting})",
                 retryable=False,
                 status_code=413,
             )
@@ -135,9 +155,9 @@ class GroqProvider(LLMProvider):
         started = time.perf_counter()
         try:
             response = self._client.chat.completions.create(**params)
-        except groq.APIStatusError as exc:
+        except self._status_error as exc:
             raise _to_llm_error(exc) from exc
-        except groq.APIConnectionError as exc:  # includes APITimeoutError
+        except self._connection_error as exc:
             raise LLMError(str(exc), retryable=True) from exc
         latency = time.perf_counter() - started
 
@@ -148,6 +168,7 @@ class GroqProvider(LLMProvider):
             usage=_usage(response.usage),
             model=response.model,
             latency_s=latency,
+            provider=self.name,
         )
 
     def _to_wire(self, message: Message) -> list[dict[str, Any]]:
@@ -222,13 +243,13 @@ def estimate_tokens(params: dict[str, Any]) -> int:
     return int(len(payload) / _CHARS_PER_TOKEN) + 1
 
 
-def _error_code(exc: groq.APIStatusError) -> str | None:
+def _error_code(exc: Any) -> str | None:
     body = exc.body if isinstance(exc.body, dict) else {}
     error = body.get("error", body)
     return error.get("code") if isinstance(error, dict) else None
 
 
-def _to_llm_error(exc: groq.APIStatusError) -> LLMError:
+def _to_llm_error(exc: Any) -> LLMError:
     status = exc.status_code
     code = _error_code(exc)
     retry_after = _retry_after(exc)
@@ -263,14 +284,14 @@ def _to_llm_error(exc: groq.APIStatusError) -> LLMError:
     return LLMError(message, retryable=retryable, status_code=status, retry_after_s=retry_after)
 
 
-def _failed_generation(exc: groq.APIStatusError) -> str | None:
+def _failed_generation(exc: Any) -> str | None:
     body = exc.body if isinstance(exc.body, dict) else {}
     error = body.get("error", body)
     text = error.get("failed_generation") if isinstance(error, dict) else None
     return text if isinstance(text, str) and text.strip() else None
 
 
-def _retry_after(exc: groq.APIStatusError) -> float | None:
+def _retry_after(exc: Any) -> float | None:
     value = exc.response.headers.get("retry-after") if exc.response is not None else None
     try:
         return float(value) if value is not None else None

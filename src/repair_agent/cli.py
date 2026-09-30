@@ -147,30 +147,71 @@ def _describe_llm_error(exc: LLMError, model: str, provider: str) -> str:
 
 @app.command()
 def ping() -> None:
-    """Send one tiny request to the configured LLM to verify credentials (costs a few tokens)."""
+    """Send one tiny request to the configured LLM to verify credentials (costs a few tokens).
+
+    With provider=pool, every backend is checked on its own (tools included, since the agent
+    cannot work without tool calling)."""
     from repair_agent.llm import create_provider
-    from repair_agent.llm.base import Message, TextBlock
-    from repair_agent.llm.pricing import estimate_cost
 
     settings = get_settings()
+    if settings.llm.provider == "pool":
+        _ping_pool(settings)
+        return
     try:
         provider = create_provider(settings)
     except (RuntimeError, NotImplementedError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    _ping_one(provider, settings, settings.llm.provider)
+
+
+def _ping_one(provider, settings, label: str, *, tools: bool = False) -> None:
+    from repair_agent.llm.base import Message, TextBlock, ToolSpec
+    from repair_agent.llm.pricing import estimate_cost
+
+    specs = (
+        [
+            ToolSpec(
+                name="finish",
+                description="Report that the connectivity check is done.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"],
+                },
+            )
+        ]
+        if tools
+        else []
+    )
+    system = (
+        "You are a connectivity check. Call the finish tool with summary 'pong'."
+        if tools
+        else "You are a connectivity check. Reply with the single word: pong"
+    )
     try:
         response = provider.complete(
-            system="You are a connectivity check. Reply with the single word: pong",
+            system=system,
             messages=[Message(role="user", content=[TextBlock(text="ping")])],
-            tools=[],
+            tools=specs,
             max_output_tokens=1024,
         )
     except LLMError as exc:
         typer.echo(
-            f"error: {_describe_llm_error(exc, settings.llm.model, settings.llm.provider)}",
-            err=True,
+            f"error ({label}): {_describe_llm_error(exc, settings.llm.model, label)}", err=True
         )
         raise typer.Exit(code=1) from exc
+    if tools:
+        called = [c.name for c in response.message.tool_calls]
+        typer.echo(f"[{label}] model={response.model} tool calls={called or 'none'}")
+        if "finish" not in called:
+            typer.echo(f"error ({label}): the model did not call the tool", err=True)
+            raise typer.Exit(code=1)
+        typer.echo(
+            f"[{label}] tokens in/out={response.usage.input_tokens}/"
+            f"{response.usage.output_tokens} latency={response.latency_s:.2f}s"
+        )
+        return
     cost = estimate_cost(response.usage, settings.llm.model, settings.pricing)
     if settings.llm.provider == "groq" and settings.llm.groq_free_tier:
         list_price = f"${cost:.6f}" if cost is not None else "n/a"
@@ -184,6 +225,30 @@ def ping() -> None:
         f"tokens in/out={response.usage.input_tokens}/{response.usage.output_tokens} "
         f"latency={response.latency_s:.2f}s cost={cost_text}"
     )
+
+
+def _ping_pool(settings) -> None:
+    from repair_agent.llm import create_backend, pool_backends_available
+
+    usable, skipped = pool_backends_available(settings)
+    for note in skipped:
+        typer.echo(f"skipped: {note}")
+    if not usable:
+        typer.echo("error: no pool backend has an API key; add one to .env", err=True)
+        raise typer.Exit(code=1)
+    failed = []
+    for backend in usable:
+        try:
+            _ping_one(create_backend(settings, backend), settings, backend.name, tools=True)
+        except typer.Exit:
+            failed.append(backend.name)
+        except RuntimeError as exc:
+            typer.echo(f"error ({backend.name}): {exc}", err=True)
+            failed.append(backend.name)
+    ok = len(usable) - len(failed)
+    typer.echo(f"pool: {ok}/{len(usable)} backend(s) answered with a tool call")
+    if failed:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -352,7 +417,12 @@ def run_eval(
         },
         "docker_server": base.client.version().get("Version"),
     }
-    manifest = build_manifest(eval_id, settings, provider.name, tasks, runs, environment)
+    backends = [b.name for b in getattr(provider, "backends", [])] or None
+    if backends:
+        typer.echo(f"provider pool ({settings.llm.pool_strategy}): {', '.join(backends)}")
+    manifest = build_manifest(
+        eval_id, settings, provider.name, tasks, runs, environment, backends=backends
+    )
     if resume:
         if not (eval_dir / "manifest.json").is_file():
             typer.echo(f"error: no eval {resume!r} under {settings.runs_dir}", err=True)

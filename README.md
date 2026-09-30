@@ -40,7 +40,8 @@ uv run repair-agent report eval-<id> [--append-results]
 All settings come from environment variables or `.env` (see `.env.example`). Non-secret
 settings use the `REPAIR_` prefix with `__` for nesting, e.g. `REPAIR_LLM__MODEL`,
 `REPAIR_SANDBOX__MEMORY_MB`. Secrets use their standard names (`ANTHROPIC_API_KEY`,
-`GROQ_API_KEY`, `GITHUB_TOKEN`), are held as `SecretStr`, and are scrubbed from traces.
+`GROQ_API_KEY`, `GITHUB_TOKEN`, and each pool backend's `api_key_env` such as
+`NVIDIA_API_KEY`), are held as `SecretStr`, and are scrubbed from traces.
 
 ## Architecture
 
@@ -50,6 +51,9 @@ flowchart LR
     Loop -->|neutral Message / ToolSpec| LLM[llm/base.py]
     LLM --> A[llm/anthropic.py]
     LLM --> G[llm/groq.py]
+    LLM --> P[llm/pool.py: balance across backends]
+    P --> G
+    P --> O[llm/openai_compat.py: NVIDIA, OpenRouter, vLLM]
     Loop --> Reg[tools/ ToolRegistry]
     Reg --> FT[list / read / edit]
     Reg --> S[search_code: ripgrep]
@@ -103,7 +107,7 @@ truncation note.
 | Module | Responsibility | Phase |
 |---|---|---|
 | `config.py` | Pydantic settings: LLM, budgets, tools, sandbox, GitHub allowlist, pricing | 1 ✅ |
-| `llm/` | Provider-agnostic interface; Anthropic and Groq providers; cost estimation | 1 ✅ (Groq: 3 ✅) |
+| `llm/` | Provider-agnostic interface; Anthropic, Groq and OpenAI-compatible providers; provider pool; cost estimation | 1 ✅ (Groq: 3 ✅, pool ✅) |
 | `tracing.py` | Append-only JSONL trace per task, flushed per event, with secret redaction | 1 ✅ |
 | `sandbox/` | Host workspace (git), Docker sandbox, JUnit parsing | 2 ✅ |
 | `tools/` | Six agent tools + registry (validation, errors, truncation) | 2 ✅ |
@@ -166,6 +170,53 @@ Design decisions and the alternatives considered are in [DECISIONS.md](DECISIONS
 
 Switch providers with `REPAIR_LLM__PROVIDER` and `REPAIR_LLM__MODEL`; both profiles are in
 `.env.example`.
+
+#### Provider pool: one model, several free backends
+
+A single free tier covers only 6–10 eval attempts a day. `REPAIR_LLM__PROVIDER=pool` balances
+requests across several endpoints that serve **the same model**. By default that is
+`openai/gpt-oss-120b` on Groq, then on [NVIDIA's free API catalog](https://build.nvidia.com)
+(OpenAI-compatible).
+
+```bash
+# .env: add a free key from build.nvidia.com next to GROQ_API_KEY
+NVIDIA_API_KEY=...
+REPAIR_LLM__PROVIDER=pool
+
+uv run repair-agent ping    # checks every backend separately, with a tool call
+uv run repair-agent eval --runs 1
+```
+
+- **Routing.** `round_robin` (default) rotates the first backend on each request; `failover`
+  always prefers the first (`REPAIR_LLM__POOL_STRATEGY`).
+- **Benching.** A backend is skipped until it recovers when:
+  - its quota runs out: 429 with a long retry-after or a daily/credit message, or 402;
+  - it fails transiently: 5xx, a connection error, or a per-minute 429 (briefly);
+  - its key is rejected (401/403) or it doesn't serve the model (404): for the rest of the
+    run.
+
+  In each case the same request goes to the next backend immediately.
+- **Not failed over:** errors about the request itself (400s, a text-only answer when a tool
+  call is required), because another host of the same model would answer the same way.
+- **Pool exhausted.** When every backend is benched, the attempt ends as infrastructure and
+  the eval stops for a later `--resume`, as with one provider.
+- **Same profile on every backend.** Every backend gets the same request shaping (the 8K
+  clamp), so a pool eval runs the baseline profile. Only the host changes.
+- **Recording.**
+  - Traces name the backend that answered each request and any failovers.
+  - Results record requests and tokens per backend.
+  - The report has a *Backends* table, including the resolve rate of attempts served
+    entirely by one backend, so a host that behaves differently shows up.
+- **More backends.** Add OpenRouter, Cerebras or a local vLLM as JSON; keys are read from
+  the environment or `.env` and scrubbed from traces:
+  ```bash
+  REPAIR_LLM__POOL='[{"name":"groq","kind":"groq","api_key_env":"GROQ_API_KEY","tpm_limit":8000},
+    {"name":"nvidia","base_url":"https://integrate.api.nvidia.com/v1","api_key_env":"NVIDIA_API_KEY","tpm_limit":8000},
+    {"name":"openrouter","base_url":"https://openrouter.ai/api/v1","model":"openai/gpt-oss-120b:free","api_key_env":"OPENROUTER_API_KEY","tpm_limit":8000}]'
+  ```
+
+A pool eval is a separate eval (its manifest lists the backends), not a resume of a
+single-provider one. Details and caveats are in [DECISIONS.md #35](DECISIONS.md).
 
 ## Benchmark
 

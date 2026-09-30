@@ -81,10 +81,36 @@ class EvalManifest(BaseModel):
         return problems
 
 
-def config_snapshot(settings: Settings, provider_name: str) -> dict[str, Any]:
-    """Everything that can change results; two evals are comparable only if this matches."""
+def config_snapshot(
+    settings: Settings, provider_name: str, backends: list[str] | None = None
+) -> dict[str, Any]:
+    """Everything that can change results; two evals are comparable only if this matches.
+
+    For a pool, ``backends`` names the members that had an API key when the eval started;
+    their endpoint settings are recorded, so adding or removing a backend is a config change
+    (``--force`` resumes anyway).
+    """
     llm = settings.llm
-    return {
+    pool = None
+    if provider_name == "pool":
+        members = [b for b in llm.pool if backends is None or b.name in backends]
+        pool = {
+            "strategy": llm.pool_strategy,
+            "backends": [
+                {
+                    "name": b.name,
+                    "kind": b.kind,
+                    "base_url": b.base_url,
+                    "model": b.model_for(llm.model),
+                    "tpm_limit": b.tpm_limit,
+                    "tool_choice": b.tool_choice or llm.tool_choice_for("pool"),
+                    "reasoning_effort": b.reasoning_effort,
+                    "free_tier": b.free_tier,
+                }
+                for b in members
+            ],
+        }
+    snapshot = {
         "provider": provider_name,
         "model": llm.model,
         "tool_choice": llm.tool_choice_for(provider_name),
@@ -103,6 +129,9 @@ def config_snapshot(settings: Settings, provider_name: str) -> dict[str, Any]:
         "tools": settings.tools.model_dump(),
         "sandbox": settings.sandbox.model_dump(),
     }
+    if pool is not None:  # only for pools, so single-provider snapshots stay unchanged
+        snapshot["pool"] = pool
+    return snapshot
 
 
 def git_state(cwd: Path | None = None) -> tuple[str | None, bool | None]:
@@ -130,6 +159,7 @@ def build_manifest(
     tasks: list[Task],
     runs: int,
     environment: dict[str, Any] | None = None,
+    backends: list[str] | None = None,
 ) -> EvalManifest:
     sha, dirty = git_state()
     return EvalManifest(
@@ -139,7 +169,7 @@ def build_manifest(
         package_version=__version__,
         git_sha=sha,
         git_dirty=dirty,
-        config=config_snapshot(settings, provider_name),
+        config=config_snapshot(settings, provider_name, backends),
         tasks={
             t.id: TaskMeta(
                 file_hash=t.file_hash, repo=t.repo, bug_type=t.bug_type, difficulty=t.difficulty

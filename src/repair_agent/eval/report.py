@@ -42,6 +42,35 @@ def _group_table(title: str, groups: dict[str, GroupStats]) -> list[str]:
     return [*lines, ""]
 
 
+def _backend_section(cfg: dict, m: Metrics) -> list[str]:
+    """Which pool backend served what (empty for single-provider evals)."""
+    pool = cfg.get("pool")
+    if not pool:
+        return []
+    lines = [
+        f"## Backends (pool, {pool['strategy']})",
+        "",
+        "Every backend serves the same model; this shows where the requests went. "
+        "'Sole' counts attempts answered entirely by one backend.",
+        "",
+        "| Backend | Endpoint | Requests (share) | Failed over from | Tokens in / out "
+        "| Sole attempts resolved |",
+        "|---|---|---|---|---|---|",
+    ]
+    for b in pool["backends"]:
+        s = m.by_backend.get(b["name"])
+        endpoint = b["base_url"] or b["kind"]
+        if s is None:
+            lines.append(f"| {b['name']} | {endpoint} | 0 | 0 | 0 / 0 | n/a |")
+            continue
+        sole = f"{s.sole_resolved}/{s.sole_attempts}" if s.sole_attempts else "n/a"
+        lines.append(
+            f"| {b['name']} | {endpoint} | {s.requests} ({pct(s.request_share)}) | "
+            f"{s.failovers_from} | {s.tokens_in:,} / {s.tokens_out:,} | {sole} |"
+        )
+    return [*lines, ""]
+
+
 def render_markdown(manifest: EvalManifest, m: Metrics) -> str:
     cfg = manifest.config
     complete = m.valid_attempts == m.planned_attempts
@@ -117,6 +146,7 @@ def render_markdown(manifest: EvalManifest, m: Metrics) -> str:
         f"| Wall time p50 / p95 | {num(m.wall_p50_s)}s / {num(m.wall_p95_s)}s |",
         f"| LLM time p50 / p95 | {num(m.llm_p50_s)}s / {num(m.llm_p95_s)}s |",
         "",
+        *_backend_section(cfg, m),
         "## Failure modes (unresolved attempts)",
         "",
         "| Mode | Attempts |",

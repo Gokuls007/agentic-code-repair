@@ -134,6 +134,10 @@ class LLMResponse(BaseModel):
     usage: Usage
     model: str
     latency_s: float
+    # Name of the backend that answered (differs from the provider's name under a pool).
+    provider: str | None = None
+    # Backends a pool tried first for this request and why each failed.
+    fallbacks: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class LLMError(RuntimeError):

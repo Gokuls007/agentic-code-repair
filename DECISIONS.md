@@ -597,3 +597,80 @@ re-labelled.
 **Costs of this choice.** The small context and tool-output limits may lower the resolve
 rate compared with the defaults. That is part of what this baseline measures, and it will be
 stated next to the numbers.
+## 35. Provider pool: the same model on several free backends (amends #34's runtime, not its profile)
+
+**Decision.**
+- **What it is.** `REPAIR_LLM__PROVIDER=pool` puts several endpoints serving the **same
+  model** behind one provider. The default pool is `openai/gpt-oss-120b` on Groq's free tier,
+  then on NVIDIA's free API catalog (`integrate.api.nvidia.com/v1`, OpenAI-compatible).
+  More backends (OpenRouter, Cerebras, a local vLLM) are one JSON entry each in
+  `REPAIR_LLM__POOL`, with their key named by `api_key_env`.
+- **Routing.** `round_robin` (default) rotates the first backend on every request to spread
+  per-minute limits; `failover` always prefers the first.
+- **Benching.**
+  - Benched until the cooldown ends:
+    - a quota-exhausted backend (429 with a retry-after above `max_retry_wait_s`, or a
+      daily/credit message; or 402), for the retry-after, else `pool_quota_cooldown_s`
+      (1 h);
+    - a transient failure (5xx, connection, per-minute 429), briefly
+      (`pool_transient_cooldown_s`, 30 s).
+  - Benched for the rest of the process: a rejected key (401/403) or a model the host
+    doesn't serve (404).
+  - In every case the same request goes to the next backend at once, with the caller's
+    remaining time.
+- **Not failed over.** 400s and "no tool call" are about the request, and another host of
+  the same model would answer the same way. A non-retryable 413 (over one backend's
+  per-minute cap) *is* tried on the next backend. If every backend says 413, the loop's
+  context trimming takes over as before.
+- **Pool exhausted.** When every backend is benched, the pool raises a retryable 429 whose
+  retry-after is the earliest reopening. As with a single provider, a long wait ends the
+  attempt as infrastructure, and the eval stops and resumes later.
+- **Profile.** The NVIDIA backend gets the same 8,000-token request shaping as Groq, although
+  NVIDIA has no such per-minute cap. Every request is built identically whichever backend
+  serves it, so a pool eval runs the #34 profile. Only the host varies.
+- **Recording.**
+  - Every `llm_call` trace event names the backend that answered, plus any backends that
+    failed first and why.
+  - `AgentResult.backend_usage` has requests, failovers and tokens per backend.
+  - Cost is charged per backend; free-tier backends are $0.00 with the list-price
+    equivalent kept.
+  - The manifest records the strategy and each backend with a key (endpoint, model id,
+    clamp, tool_choice), so adding a backend is a config change that `--resume` refuses
+    without `--force`. Single-provider snapshots are unchanged, and existing evals still
+    resume.
+  - The report gets a "Backends" table: request share, failovers, tokens, and the resolve
+    rate of attempts answered **entirely** by one backend.
+- **`ping`** checks each backend separately *with a tool*, because the agent needs tool
+  calling and `tool_choice=required`.
+
+**Why.** On Groq's free tier alone, the baseline gets 6–10 attempts a day, so 27 attempts
+take about 5 days of resumes. The same weights on a second free host roughly double the
+daily token budget and halve per-minute waiting. The comparability rule in #34 is about
+what the agent sees: model, sampling, limits. A pool changes none of that.
+
+**Risks and how they're handled.**
+- **Hosts can differ** in quantization, chat template, or tool-call parsing, even with the
+  same weights. So a pool eval is its own eval id and its own RESULTS row, not a resume of
+  the Groq-only eval. The per-backend "sole attempts resolved" column shows whether one host
+  does worse.
+- **Unverified live.** At the time of writing there was no NVIDIA key. The NVIDIA path is
+  covered by unit tests against the real `openai` SDK's error types (429 with retry-after,
+  401, connection errors). Still unverified:
+  - whether NVIDIA's `openai/gpt-oss-120b` accepts `tool_choice: "required"` and
+    `reasoning_effort`;
+  - its exact error bodies.
+
+  `repair-agent ping` with the pool checks the first two before an eval. Each backend can
+  turn either off (`tool_choice`, `reasoning_effort`) without code changes.
+- **One account per provider.** A pool is for different providers. Several free accounts at
+  one provider to multiply its quota would break most providers' terms, and it isn't
+  supported as a default.
+
+**Alternatives.**
+- A different free model (e.g. GLM or DeepSeek on NVIDIA). It would be faster to get, but it
+  is a different model, so it's a separate baseline. It can be done later with
+  `REPAIR_LLM__MODEL` and a single-backend pool.
+- Hermes Agent (Nous Research) was considered as a component and rejected. It's a
+  complete personal-assistant agent, so using it would replace the loop, sandbox and grading
+  this project measures. A Hermes *model* on an OpenAI-compatible host could still be a pool
+  backend or a comparison model.

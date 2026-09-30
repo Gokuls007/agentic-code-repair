@@ -114,6 +114,42 @@ class GroupStats(BaseModel):
     pass_at_1: float | None
 
 
+class BackendStats(BaseModel):
+    """How much of an eval one pool backend served."""
+
+    requests: int = 0
+    request_share: float | None = None
+    failovers_from: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    attempts_touched: int = 0
+    # Attempts answered entirely by this backend, and how many resolved. Comparing these
+    # across backends shows whether hosts serving the same model behave differently.
+    sole_attempts: int = 0
+    sole_resolved: int = 0
+
+
+def backend_stats(results: list[AgentResult]) -> dict[str, BackendStats]:
+    stats: dict[str, BackendStats] = defaultdict(BackendStats)
+    for r in results:
+        served = {name: u for name, u in r.backend_usage.items() if u.requests}
+        for name, u in r.backend_usage.items():
+            s = stats[name]
+            s.requests += u.requests
+            s.failovers_from += u.failovers_from
+            s.tokens_in += u.tokens_in
+            s.tokens_out += u.tokens_out
+            s.attempts_touched += 1 if u.requests else 0
+        if len(served) == 1:
+            (only,) = served
+            stats[only].sole_attempts += 1
+            stats[only].sole_resolved += int(r.resolved)
+    total = sum(s.requests for s in stats.values())
+    for s in stats.values():
+        s.request_share = s.requests / total if total else None
+    return dict(sorted(stats.items()))
+
+
 class Metrics(BaseModel):
     planned_attempts: int
     valid_attempts: int
@@ -162,6 +198,7 @@ class Metrics(BaseModel):
     by_repo: dict[str, GroupStats]
     tasks: list[TaskStats]
     infra: list[str] = Field(description="'task run k: reason' for attempts lost to infra")
+    by_backend: dict[str, BackendStats] = Field(default_factory=dict)
 
 
 def _infra_line(rec: AttemptRecord) -> str:
@@ -303,4 +340,5 @@ def compute_metrics(manifest: EvalManifest, records: list[AttemptRecord]) -> Met
         by_repo=grouped("repo"),
         tasks=task_stats,
         infra=[_infra_line(rec) for rec in records if rec.infra],
+        by_backend=backend_stats(results) if manifest.config.get("provider") == "pool" else {},
     )

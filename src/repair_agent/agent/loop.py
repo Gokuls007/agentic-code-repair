@@ -17,6 +17,7 @@ from repair_agent.agent.state import (
     AgentResult,
     AgentState,
     AgentTestSummary,
+    BackendUsage,
     Outcome,
     StopReason,
 )
@@ -260,15 +261,28 @@ class AgentLoop:
         state.llm_s += response.latency_s
         state.model_id = response.model
         u = response.usage
+        backend = response.provider or self.provider.name
+        served = state.backend_usage.setdefault(backend, BackendUsage())
+        served.requests += 1
+        served.tokens_in += u.input_tokens + u.cache_creation_input_tokens
+        served.tokens_out += u.output_tokens
+        served.cache_read_tokens += u.cache_read_input_tokens
+        for failed in response.fallbacks:
+            name = str(failed.get("backend"))
+            state.backend_usage.setdefault(name, BackendUsage()).failovers_from += 1
+        payload = {
+            "model": response.model,
+            "provider": backend,
+            "stop_reason": str(response.stop_reason),
+            "latency_s": round(response.latency_s, 3),
+            "cache_read_tokens": u.cache_read_input_tokens,
+            "cache_write_tokens": u.cache_creation_input_tokens,
+        }
+        if response.fallbacks:
+            payload["failed_over_from"] = response.fallbacks
         self.tracer.log(
             EventKind.LLM_CALL,
-            {
-                "model": response.model,
-                "stop_reason": str(response.stop_reason),
-                "latency_s": round(response.latency_s, 3),
-                "cache_read_tokens": u.cache_read_input_tokens,
-                "cache_write_tokens": u.cache_creation_input_tokens,
-            },
+            payload,
             tokens_in=u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens,
             tokens_out=u.output_tokens,
         )
@@ -408,7 +422,7 @@ def solve_task(
         tracer.log(EventKind.GRADE, graded.model_dump(mode="json"))
 
     outcome = _outcome(result.stop_reason, graded.final_tests.all_passed if graded else None)
-    cost, list_price, cost_note = _cost(provider.name, state, settings)
+    cost, list_price, cost_note = _cost(provider, state, settings)
     record = AgentResult(
         run_id=run_id,
         task_id=task.id,
@@ -437,6 +451,7 @@ def solve_task(
         cost_usd=cost,
         list_price_usd=list_price,
         cost_note=cost_note,
+        backend_usage=dict(state.backend_usage),
         wall_s=round(time.perf_counter() - wall_start, 2),
         llm_s=round(state.llm_s, 2),
         final_tests=graded.final_tests if graded else None,
@@ -464,11 +479,23 @@ def solve_task(
 
 
 def _cost(
-    provider: str, state: AgentState, settings: Settings
+    provider: LLMProvider, state: AgentState, settings: Settings
 ) -> tuple[float | None, float | None, str | None]:
     """(charged, list-price equivalent, note). Free-tier usage is $0.00, never None."""
     list_price = estimate_cost(state.usage, settings.llm.model, settings.pricing)
-    if provider == "groq" and settings.llm.groq_free_tier:
+    free = getattr(provider, "free_backends", None)
+    if free is not None:  # a pool: each backend is charged (or not) on its own terms
+        paid = [u.usage() for name, u in state.backend_usage.items() if name not in free]
+        if not paid:
+            note = f"free-tier backends only ({', '.join(sorted(state.backend_usage)) or 'none'})"
+            if list_price is not None:
+                note += f"; list-price equivalent ${list_price:.4f}"
+            return 0.0, list_price, note
+        costs = [estimate_cost(u, settings.llm.model, settings.pricing) for u in paid]
+        if any(c is None for c in costs):
+            return None, list_price, f"no price entry for {settings.llm.model!r}"
+        return sum(c for c in costs if c is not None), list_price, "paid backends only"
+    if provider.name == "groq" and settings.llm.groq_free_tier:
         note = "Groq free tier: no charge"
         if list_price is not None:
             note += f" (list-price equivalent ${list_price:.4f})"

@@ -63,6 +63,25 @@ class AgentTestSummary(BaseModel):
         )
 
 
+class BackendUsage(BaseModel):
+    """Requests and tokens served by one backend during an attempt."""
+
+    requests: int = 0
+    failovers_from: int = Field(
+        default=0, description="Requests this backend failed that another backend then served."
+    )
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cache_read_tokens: int = 0
+
+    def usage(self) -> Usage:
+        return Usage(
+            input_tokens=self.tokens_in,
+            output_tokens=self.tokens_out,
+            cache_read_input_tokens=self.cache_read_tokens,
+        )
+
+
 class AgentState(BaseModel):
     """Counters the loop updates as it runs."""
 
@@ -78,6 +97,8 @@ class AgentState(BaseModel):
     # Set once run_tests is requested past the budget: the next turn may only call finish.
     finish_only: bool = False
     last_agent_tests: AgentTestSummary | None = None
+    # Per backend that answered (one entry unless the provider is a pool).
+    backend_usage: dict[str, BackendUsage] = Field(default_factory=dict)
 
 
 class AgentResult(BaseModel):
@@ -138,6 +159,10 @@ class AgentResult(BaseModel):
         default=None, description="Cost at the provider's list price (None if unknown)."
     )
     cost_note: str | None = None
+    backend_usage: dict[str, BackendUsage] = Field(
+        default_factory=dict,
+        description="Requests and tokens per backend that answered (provider pools).",
+    )
     wall_s: float
     llm_s: float
 

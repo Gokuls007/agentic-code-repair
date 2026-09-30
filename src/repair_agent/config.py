@@ -2,12 +2,14 @@
 
 Non-secret settings use the ``REPAIR_`` prefix with ``__`` as the nesting delimiter,
 e.g. ``REPAIR_LLM__MODEL`` or ``REPAIR_BUDGET__MAX_ITERATIONS``. Secrets use their
-conventional unprefixed names (``ANTHROPIC_API_KEY``, ``GROQ_API_KEY``, ``GITHUB_TOKEN``)
-and are stored as ``SecretStr`` so they never appear in reprs, logs, or dumps.
+conventional unprefixed names (``ANTHROPIC_API_KEY``, ``GROQ_API_KEY``, ``GITHUB_TOKEN``,
+and the ``api_key_env`` of each pool backend, e.g. ``NVIDIA_API_KEY``) and are stored as
+``SecretStr`` so they never appear in reprs, logs, or dumps.
 """
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
@@ -15,11 +17,65 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-ProviderName = Literal["anthropic", "groq"]
+ProviderName = Literal["anthropic", "groq", "pool"]
+BackendKind = Literal["groq", "openai_compatible"]
+PoolStrategy = Literal["failover", "round_robin"]
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 ToolChoice = Literal["auto", "required"]
 
-DEFAULT_TOOL_CHOICE: dict[str, ToolChoice] = {"groq": "required", "anthropic": "auto"}
+# Pool backends speak the OpenAI format, so they default to "required" like Groq.
+DEFAULT_TOOL_CHOICE: dict[str, ToolChoice] = {
+    "groq": "required",
+    "anthropic": "auto",
+    "pool": "required",
+}
+
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+
+
+class BackendSettings(BaseModel):
+    """One endpoint in a provider pool. Every backend in a pool serves the same model
+    (see ``LLMSettings.pool``), so which one answers a request does not change what is
+    being measured, only where the tokens come from."""
+
+    name: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_.-]+$")
+    kind: BackendKind = "openai_compatible"
+    base_url: str | None = None
+    # The id this backend uses for the pool's model (hosts namespace ids differently).
+    # None = LLMSettings.model.
+    model: str | None = None
+    api_key_env: str = Field(min_length=1)
+    # Per-minute token cap (prompt + max completion) the provider enforces; the request's
+    # max_completion_tokens is shrunk to fit. None = no clamp.
+    tpm_limit: int | None = Field(default=None, gt=0)
+    # None = the backend kind's default ("required" for OpenAI-style APIs).
+    tool_choice: ToolChoice | None = None
+    # Send reasoning_effort for gpt-oss models (not every host accepts it).
+    reasoning_effort: bool = True
+    # Record this backend's usage as $0.00 charged (still reporting list price).
+    free_tier: bool = True
+
+    def model_for(self, pool_model: str) -> str:
+        return self.model or pool_model
+
+
+def default_pool() -> list[BackendSettings]:
+    """gpt-oss-120b on Groq's free tier, then NVIDIA's free API catalog (build.nvidia.com).
+
+    NVIDIA has no tokens-per-minute cap like Groq's, but it gets the same 8,000 clamp so
+    every request is shaped identically whichever backend serves it: the pool then runs
+    the free-tier baseline profile (DECISIONS.md #34, #35), not a variant of it.
+    """
+    return [
+        BackendSettings(name="groq", kind="groq", api_key_env="GROQ_API_KEY", tpm_limit=8000),
+        BackendSettings(
+            name="nvidia",
+            kind="openai_compatible",
+            base_url=NVIDIA_BASE_URL,
+            api_key_env="NVIDIA_API_KEY",
+            tpm_limit=8000,
+        ),
+    ]
 
 
 class ModelPrice(BaseModel):
@@ -82,6 +138,26 @@ class LLMSettings(BaseModel):
     # A retry that would have to wait longer than this (e.g. a daily-quota 429 with a long
     # retry-after) gives up instead of sleeping; the eval runner treats that as infrastructure.
     max_retry_wait_s: float = Field(default=120.0, gt=0)
+
+    # provider="pool": backends serving ``model``, used in order. "failover" always starts
+    # from the first available backend; "round_robin" rotates the starting backend on every
+    # request to spread per-minute limits. A backend that reports its quota is exhausted
+    # (or rejects the key) is benched and the next one answers. Set as JSON, e.g.
+    # REPAIR_LLM__POOL='[{"name":"nvidia","base_url":"...","api_key_env":"NVIDIA_API_KEY"}]'.
+    pool: list[BackendSettings] = Field(default_factory=default_pool)
+    pool_strategy: PoolStrategy = "round_robin"
+    # How long a backend that hit its quota stays benched when it gives no retry-after.
+    pool_quota_cooldown_s: float = Field(default=3600.0, gt=0)
+    # How long a backend that failed transiently (5xx, connection, short 429) is skipped.
+    pool_transient_cooldown_s: float = Field(default=30.0, gt=0)
+
+    @field_validator("pool")
+    @classmethod
+    def _unique_backend_names(cls, value: list[BackendSettings]) -> list[BackendSettings]:
+        names = [b.name for b in value]
+        if len(names) != len(set(names)):
+            raise ValueError(f"pool backend names must be unique, got {names}")
+        return value
 
 
 class BudgetSettings(BaseModel):
@@ -183,15 +259,39 @@ class Settings(BaseSettings):
     def secret_values(self) -> list[str]:
         """All configured secret values, for redaction in logs and traces."""
         secrets = (self.anthropic_api_key, self.groq_api_key, self.github_token)
-        return [s.get_secret_value() for s in secrets if s and s.get_secret_value()]
+        values = [s.get_secret_value() for s in secrets if s and s.get_secret_value()]
+        for backend in self.llm.pool:
+            key = self.env_secret(backend.api_key_env)
+            if key and key not in values:
+                values.append(key)
+        return values
 
-    def api_key_for(self, provider: ProviderName) -> str:
+    def env_secret(self, name: str) -> str | None:
+        """A secret by env-var name: the process environment first, then the .env file."""
+        known = {"GROQ_API_KEY": self.groq_api_key, "ANTHROPIC_API_KEY": self.anthropic_api_key}
+        if name in known:
+            secret = known[name]
+            return secret.get_secret_value() if secret and secret.get_secret_value() else None
+        value = os.environ.get(name)
+        if not value:
+            value = _dotenv_value(self.model_config.get("env_file"), name)
+        return value or None
+
+    def api_key_for(self, provider: Literal["anthropic", "groq"]) -> str:
         """Return the API key for ``provider`` or raise a clear error if it is missing."""
         secret = {"anthropic": self.anthropic_api_key, "groq": self.groq_api_key}[provider]
         if secret is None or not secret.get_secret_value():
             env_name = f"{provider.upper()}_API_KEY"
             raise RuntimeError(f"{env_name} is not set; add it to .env")
         return secret.get_secret_value()
+
+
+def _dotenv_value(env_file: object, name: str) -> str | None:
+    if not isinstance(env_file, str | Path) or not Path(env_file).is_file():
+        return None
+    from dotenv import dotenv_values
+
+    return dotenv_values(env_file).get(name)
 
 
 @lru_cache(maxsize=1)
