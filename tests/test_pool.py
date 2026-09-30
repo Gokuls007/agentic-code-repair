@@ -512,3 +512,34 @@ def test_404_after_the_backend_has_answered_is_transient() -> None:
     assert info.value.retryable and info.value.status_code == 404
     clock.now += 6
     assert call(p).provider == "a"  # back after the short cooldown, not benched for good
+
+
+def test_prompt_outgrowing_the_limit_is_a_scored_budget_stop_not_infra(task, ws) -> None:
+    from repair_agent.agent import StopReason
+    from repair_agent.eval.metrics import failure_mode
+    from repair_agent.eval.runner import is_infra_failure
+
+    too_big = LLMError("prompt is ~6,990 tokens", retryable=False, status_code=413)
+    backend = Named(
+        "nvidia",
+        [reply(tc("read_file", path="src/calc/stats.py")), too_big, too_big],
+    )
+    settings = Settings(_env_file=None, llm=LLMSettings(provider="pool"))
+    provider = PoolProvider(
+        [Backend(name="nvidia", provider=backend)], settings.llm, clock=FakeClock()
+    )
+    with Tracer(ws.root.parent / "runs", "run1", task.id) as tracer:
+        result = solve_task(
+            task,
+            ws,
+            provider=provider,
+            sandbox=FakeSandbox(),
+            settings=settings,
+            tracer=tracer,
+            run_id="run1",
+            clock=FakeClock(),
+            sleep=RecordingSleep(),
+        )
+    assert result.stop_reason == StopReason.CONTEXT_LIMIT
+    assert not is_infra_failure(result)  # counted, not re-run forever
+    assert failure_mode(result) == "budget_exceeded"

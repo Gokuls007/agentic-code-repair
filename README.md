@@ -123,7 +123,9 @@ single message ending with a budget line, for example
 `[budget] iteration 7/30 · test runs 2/10 · tokens 41,200/500,000 · time 1m12s/15m00s`.
 
 - **Stop reasons:** `finished`, `max_iterations`, `token_budget`, `cost_budget`,
-  `test_budget`, `timeout`, `refusal`, `no_action`, `llm_error`, `sandbox_error`.
+  `test_budget`, `context_limit` (the prompt outgrew the per-request limit even after
+  trimming; scored as `budget_exceeded`), `timeout`, `refusal`, `no_action`, `llm_error`,
+  `sandbox_error`.
 - **Budgets:**
   - The token budget counts uncached input, cache writes and output; cache reads are
     excluded.

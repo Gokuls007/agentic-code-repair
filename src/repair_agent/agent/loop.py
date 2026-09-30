@@ -178,6 +178,25 @@ class AgentLoop:
                             },
                         )
                         continue
+                    # Nothing left to trim: the conversation outgrew the profile's
+                    # per-request limit. That is the attempt running out of room (a budget
+                    # stop the agent is scored on), not an infrastructure failure.
+                    self.tracer.log(
+                        EventKind.ERROR,
+                        {
+                            "source": "llm",
+                            "status": 413,
+                            "kind": "context_limit",
+                            "message": str(exc),
+                        },
+                    )
+                    return LoopResult(
+                        StopReason.CONTEXT_LIMIT,
+                        state,
+                        messages,
+                        error=str(exc),
+                        error_status=413,
+                    )
                 reason = StopReason.TIMEOUT if self.time_left() <= 0 else StopReason.LLM_ERROR
                 self.tracer.log(
                     EventKind.ERROR,

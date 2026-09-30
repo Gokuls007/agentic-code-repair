@@ -35,6 +35,7 @@ _BUDGET_STOPS = {
     StopReason.TOKEN_BUDGET,
     StopReason.COST_BUDGET,
     StopReason.TEST_BUDGET,
+    StopReason.CONTEXT_LIMIT,
 }
 
 

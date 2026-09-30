@@ -19,6 +19,8 @@ class StopReason(StrEnum):
     TOKEN_BUDGET = "token_budget"
     COST_BUDGET = "cost_budget"
     TEST_BUDGET = "test_budget"
+    # The prompt no longer fits the per-request limit even after trimming old tool output.
+    CONTEXT_LIMIT = "context_limit"
     TIMEOUT = "timeout"
     REFUSAL = "refusal"
     NO_ACTION = "no_action"

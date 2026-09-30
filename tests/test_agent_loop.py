@@ -464,10 +464,13 @@ def test_prompt_too_large_triggers_emergency_elision_then_continues(task, ws) ->
     assert events and events[0].data["action"] == "emergency_elide"
 
 
-def test_413_with_nothing_left_to_elide_stops_with_llm_error(task, ws) -> None:
+def test_413_with_nothing_left_to_elide_stops_with_context_limit(task, ws) -> None:
+    # Outgrowing the per-request limit is the attempt running out of room (scored as a
+    # budget stop), not an infrastructure failure that would be re-run forever.
     script = [LLMError("prompt too big for TPM", retryable=False, status_code=413)]
     result, _, _ = run(task, ws, script)
-    assert result.stop_reason == StopReason.LLM_ERROR
+    assert result.stop_reason == StopReason.CONTEXT_LIMIT
+    assert result.error_status == 413
 
 
 def test_malformed_tool_json_gets_an_actionable_error(task, ws) -> None:
